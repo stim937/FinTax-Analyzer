@@ -1,0 +1,13 @@
+@import "tailwindcss";
+@config "../tailwind.config.js";
+
+@theme {
+  --color-navy: #1F3C88;
+  --color-midblue: #2E5FAC;
+  --color-accent: #E8F0FE;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  margin: 0;
+}
