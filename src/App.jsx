@@ -70,6 +70,18 @@ export default function App() {
   const [portfolioValue, setPortfolioValue] = useState(0)
   const [portfolioVaR,   setPortfolioVaR]   = useState(0)   // percent (95% VaR)
 
+  // 계산 이력 (최대 20건, 같은 type은 upsert)
+  const [calcHistory, setCalcHistory] = useState([])
+  const addHistory = useCallback((entry) => {
+    setCalcHistory(prev => {
+      const filtered = prev.filter(h => h.type !== entry.type)
+      return [
+        { ...entry, id: Date.now(), date: new Date().toLocaleDateString('ko-KR') },
+        ...filtered,
+      ].slice(0, 20)
+    })
+  }, [])
+
   // 세무 유보 잔액 (taxResults 마지막 행의 runningReserve)
   const taxReserve = taxResults.length > 0
     ? taxResults[taxResults.length - 1].runningReserve
@@ -94,15 +106,29 @@ export default function App() {
   const handlePortfolioUpdate = useCallback(({ totalValue, var95pct }) => {
     setPortfolioValue(totalValue)
     setPortfolioVaR(var95pct)
-  }, [])
+    if (totalValue > 0) {
+      addHistory({
+        name: '포트폴리오',
+        type: 'VaR분석',
+        result: `총 ₩${Math.round(totalValue).toLocaleString('ko-KR')} · VaR ${var95pct.toFixed(2)}%`,
+      })
+    }
+  }, [addHistory])
 
   // TaxEntry 저장 → transactions + taxResults 갱신 → 세무 검증 탭 이동
   const handleTaxSave = useCallback((data) => {
+    const results = analyzeTax(data.transactions)
     setTransactions(data.transactions)
-    setTaxResults(analyzeTax(data.transactions))
+    setTaxResults(results)
     setTaxHeader(data.header ?? { company: '', taxYear: 2025 })
     setActiveTaxTab('validator')
-  }, [])
+    const reserve = results.length > 0 ? results[results.length - 1].runningReserve : 0
+    addHistory({
+      name: data.header?.company || '세무',
+      type: '세무검증',
+      result: `유보 ₩${Math.abs(Math.round(reserve)).toLocaleString('ko-KR')} · ${data.transactions.length}건`,
+    })
+  }, [addHistory])
 
   // 대시보드 빠른 계산 버튼
   const handleQuickAction = useCallback((action) => {
@@ -174,12 +200,13 @@ export default function App() {
               <Dashboard
                 summaryData={summaryData}
                 onQuickAction={handleQuickAction}
+                history={calcHistory}
               />
             )}
 
-            {activeFinanceTab === 'bond' && <BondCalculator />}
+            {activeFinanceTab === 'bond' && <BondCalculator onCalculate={addHistory} />}
 
-            {activeFinanceTab === 'stock' && <StockValuation />}
+            {activeFinanceTab === 'stock' && <StockValuation onCalculate={addHistory} />}
 
             {activeFinanceTab === 'portfolio' && (
               <PortfolioRisk onUpdate={handlePortfolioUpdate} />

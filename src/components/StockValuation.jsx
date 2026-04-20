@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import Tooltip        from './ui/Tooltip'
 import FormattedInput from './ui/FormattedInput'
 
@@ -123,7 +123,7 @@ function Field({ label, unit, children }) {
 }
 
 // ── 메인 컴포넌트 ──────────────────────────────────────────
-export default function StockValuation() {
+export default function StockValuation({ onCalculate }) {
   const [name,      setName]      = useState('삼성전자')
   const [price,     setPrice]     = useState(74000)
   const [eps,       setEps]       = useState(5000)
@@ -142,6 +142,18 @@ export default function StockValuation() {
   const upsideB  = ivB != null ? ((ivB - price) / price) * 100 : null
 
   const validInputs = price > 0 && eps > 0
+
+  const firstCalc = useRef(true)
+  useEffect(() => {
+    if (firstCalc.current) { firstCalc.current = false; return }
+    if (!validInputs) return
+    const v = getVerdict(price, ivA)
+    onCalculate?.({
+      name: name || '종목',
+      type: '주식평가',
+      result: `${v.label} · IV ${fmtKRW(ivA)}`,
+    })
+  }, [ivA, ivB, price, name])
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

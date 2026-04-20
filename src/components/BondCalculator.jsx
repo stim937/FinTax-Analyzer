@@ -144,7 +144,7 @@ function PriceCurveChart({ face, coupon, years, freq, ytm }) {
 }
 
 // ── 메인 컴포넌트 ──────────────────────────────────────────
-export default function BondCalculator() {
+export default function BondCalculator({ onCalculate }) {
   // 라이브 입력값 (즉시 반영 — 입력 UI 전용)
   const [face,   setFace]   = useState(1000000)
   const [coupon, setCoupon] = useState(5)
@@ -172,6 +172,17 @@ export default function BondCalculator() {
   const isCalculating = isPending
   const upDelta   = result ? -result.modified * result.P * 0.01 : null
   const downDelta = result ?  result.modified * result.P * 0.01 : null
+
+  const firstCalc = useRef(true)
+  useEffect(() => {
+    if (firstCalc.current) { firstCalc.current = false; return }
+    if (!result) return
+    onCalculate?.({
+      name: '채권',
+      type: '채권계산',
+      result: `${fmtKRW(result.P)} · Duration ${fmt(result.modified)}`,
+    })
+  }, [dKey])  // 문자열 원시값으로 비교 — 객체 참조 불안정 회피
 
   return (
     <div className="space-y-6">

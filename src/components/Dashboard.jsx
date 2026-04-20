@@ -6,6 +6,20 @@ const DEFAULT_SUMMARY = [
 
 const HISTORY_COLS = ['종목명', '유형', '날짜', '결과']
 
+const TYPE_STYLE = {
+  '채권계산': 'bg-navy/10 text-navy',
+  '주식평가': 'bg-emerald-100 text-emerald-700',
+  'VaR분석':  'bg-purple-100 text-purple-700',
+  '세무검증': 'bg-amber-100 text-amber-700',
+}
+function TypeBadge({ type }) {
+  return (
+    <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${TYPE_STYLE[type] ?? 'bg-gray-100 text-gray-500'}`}>
+      {type}
+    </span>
+  )
+}
+
 const QUICK_ACTIONS = ['채권 계산', '주식 평가', '세무 검증']
 
 function SummaryCard({ icon, label, value }) {
@@ -23,7 +37,7 @@ function SummaryCard({ icon, label, value }) {
   )
 }
 
-export default function Dashboard({ summaryData = {}, onQuickAction }) {
+export default function Dashboard({ summaryData = {}, onQuickAction, history = [] }) {
   return (
     <div className="space-y-6">
       {/* 요약 카드 */}
@@ -58,14 +72,22 @@ export default function Dashboard({ summaryData = {}, onQuickAction }) {
                 </tr>
               </thead>
               <tbody>
-                <tr>
-                  <td
-                    colSpan={HISTORY_COLS.length}
-                    className="py-10 text-center text-gray-400 text-sm"
-                  >
-                    계산 이력이 없습니다
-                  </td>
-                </tr>
+                {history.length === 0 ? (
+                  <tr>
+                    <td colSpan={HISTORY_COLS.length} className="py-10 text-center text-gray-400 text-sm">
+                      계산 이력이 없습니다
+                    </td>
+                  </tr>
+                ) : (
+                  history.map((h) => (
+                    <tr key={h.id} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
+                      <td className="py-2.5 px-3 font-medium text-gray-700">{h.name}</td>
+                      <td className="py-2.5 px-3"><TypeBadge type={h.type} /></td>
+                      <td className="py-2.5 px-3 text-gray-400 text-xs whitespace-nowrap">{h.date}</td>
+                      <td className="py-2.5 px-3 text-gray-600 text-xs">{h.result}</td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
