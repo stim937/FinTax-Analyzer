@@ -171,18 +171,15 @@ export default function StockValuation() {
 
         <div className="grid grid-cols-2 gap-4">
           <Field label="EPS 성장률" unit="%">
-            <input type="number" className={inputCls} value={growth} step={0.1}
-              onChange={(e) => setGrowth(Number(e.target.value))} />
+            <FormattedInput className={inputCls} value={growth} min={0} step={0.1} onChange={setGrowth} />
           </Field>
           <Field label={<Tooltip text="요구수익률(r) — 투자자가 기대하는 최소 수익률. DDM 모델에서 r > g 조건이 필요합니다.">요구수익률 r</Tooltip>} unit="%">
-            <input type="number" className={inputCls} value={required} step={0.1}
-              onChange={(e) => setRequired(Number(e.target.value))} />
+            <FormattedInput className={inputCls} value={required} min={0} step={0.1} onChange={setRequired} />
           </Field>
         </div>
 
         <Field label={<Tooltip text="PER(주가수익비율) — 주가 ÷ EPS. 업종 평균 PER를 기준으로 내재가치를 산출합니다.">업종 평균 PER</Tooltip>}>
-          <input type="number" className={inputCls} value={sectorPER} step={0.1}
-            onChange={(e) => setSectorPER(Number(e.target.value))} />
+          <FormattedInput className={inputCls} value={sectorPER} min={0} step={0.1} onChange={setSectorPER} />
         </Field>
 
         {/* DDM 경고 */}

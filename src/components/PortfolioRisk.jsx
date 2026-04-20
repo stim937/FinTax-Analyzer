@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from 'react'
-import UITooltip from './ui/Tooltip'
+import UITooltip      from './ui/Tooltip'
+import FormattedInput from './ui/FormattedInput'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -314,21 +315,17 @@ export default function PortfolioRisk({ onUpdate }) {
                       />
                     </td>
                     <td className="py-2 px-2">
-                      <input
-                        type="number"
+                      <FormattedInput
                         className={`${inputCls} text-right`}
-                        value={h.qty}
-                        min={0}
-                        onChange={(e) => updateHolding(h.id, 'qty', Number(e.target.value))}
+                        value={h.qty} min={0}
+                        onChange={(v) => updateHolding(h.id, 'qty', v)}
                       />
                     </td>
                     <td className="py-2 px-2">
-                      <input
-                        type="number"
+                      <FormattedInput
                         className={`${inputCls} text-right`}
-                        value={h.price}
-                        min={0}
-                        onChange={(e) => updateHolding(h.id, 'price', Number(e.target.value))}
+                        value={h.price} min={0}
+                        onChange={(v) => updateHolding(h.id, 'price', v)}
                       />
                     </td>
                     <td className="py-2 px-2 text-right font-medium text-gray-600">

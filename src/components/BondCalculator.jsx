@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
+import { useDebounce } from '../hooks/useDebounce'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -144,32 +145,31 @@ function PriceCurveChart({ face, coupon, years, freq, ytm }) {
 
 // ── 메인 컴포넌트 ──────────────────────────────────────────
 export default function BondCalculator() {
-  const [face,          setFace]          = useState(1000000)
-  const [coupon,        setCoupon]        = useState(5)
-  const [years,         setYears]         = useState(3)
-  const [ytm,           setYtm]           = useState(4)
-  const [freq,          setFreq]          = useState(1)
-  const [result,        setResult]        = useState(null)
-  const [error,         setError]         = useState('')
-  const [isCalculating, setIsCalculating] = useState(false)
+  // 라이브 입력값 (즉시 반영 — 입력 UI 전용)
+  const [face,   setFace]   = useState(1000000)
+  const [coupon, setCoupon] = useState(5)
+  const [years,  setYears]  = useState(3)
+  const [ytm,    setYtm]    = useState(4)
+  const [freq,   setFreq]   = useState(1)
 
-  // 100ms 딜레이 스피너 + 계산
-  useEffect(() => {
-    if (face <= 0 || coupon < 0 || years <= 0 || ytm <= 0) {
-      setError('모든 값은 0보다 커야 합니다.')
-      setResult(null)
-      setIsCalculating(false)
-      return
-    }
-    setError('')
-    setIsCalculating(true)
-    const t = setTimeout(() => {
-      setResult(calcBond(face, coupon, years, ytm, freq))
-      setIsCalculating(false)
-    }, 100)
-    return () => clearTimeout(t)
-  }, [face, coupon, years, ytm, freq])
+  // 5개 파라미터를 하나의 키로 묶어서 디바운스
+  const paramsKey = `${face}|${coupon}|${years}|${ytm}|${freq}`
+  const { debounced: dKey, isPending } = useDebounce(paramsKey, 400)
 
+  // 디바운스된 파라미터 파싱
+  const [dFace, dCoupon, dYears, dYtm, dFreq] = useMemo(
+    () => dKey.split('|').map(Number),
+    [dKey],
+  )
+
+  // 계산은 디바운스된 값 기준
+  const { result, error } = useMemo(() => {
+    if (dFace <= 0 || dCoupon < 0 || dYears <= 0 || dYtm <= 0)
+      return { result: null, error: '모든 값은 0보다 커야 합니다.' }
+    return { result: calcBond(dFace, dCoupon, dYears, dYtm, dFreq), error: '' }
+  }, [dFace, dCoupon, dYears, dYtm, dFreq])
+
+  const isCalculating = isPending
   const upDelta   = result ? -result.modified * result.P * 0.01 : null
   const downDelta = result ?  result.modified * result.P * 0.01 : null
 
@@ -190,18 +190,18 @@ export default function BondCalculator() {
           </InputField>
 
           <InputField label="쿠폰율" unit="%">
-            <input type="number" className={inputCls} value={coupon} min={0} step={0.1}
-              onChange={(e) => setCoupon(Number(e.target.value))} />
+            <FormattedInput className={inputCls} value={coupon} min={0} step={0.1}
+              onChange={setCoupon} />
           </InputField>
 
           <InputField label="만기" unit="년">
-            <input type="number" className={inputCls} value={years} min={1} step={1}
-              onChange={(e) => setYears(Math.max(1, Math.floor(Number(e.target.value))))} />
+            <FormattedInput className={inputCls} value={years} min={1} step={1}
+              onChange={(v) => setYears(Math.max(1, Math.floor(v)))} />
           </InputField>
 
           <InputField label="시장금리 YTM" unit="%">
-            <input type="number" className={inputCls} value={ytm} min={0.01} step={0.1}
-              onChange={(e) => setYtm(Number(e.target.value))} />
+            <FormattedInput className={inputCls} value={ytm} min={0.01} step={0.1}
+              onChange={setYtm} />
           </InputField>
 
           <InputField label="이자지급 횟수">
@@ -213,7 +213,7 @@ export default function BondCalculator() {
         </div>
 
         {/* 결과 패널 */}
-        <div className="bg-white rounded-xl shadow-sm p-6">
+        <div className={`bg-white rounded-xl shadow-sm p-6 transition-opacity duration-300 ${isCalculating ? 'opacity-50' : 'opacity-100'}`}>
           <div className="flex items-center justify-between border-b border-gray-100 pb-3 mb-4">
             <h2 className="text-base font-semibold text-gray-700">계산 결과</h2>
             {isCalculating && <Spinner size="sm" label="" />}
@@ -225,11 +225,11 @@ export default function BondCalculator() {
             </div>
           )}
 
-          {!error && !result && !isCalculating && (
+          {!error && !result && (
             <p className="text-sm text-gray-400 text-center py-8">입력값을 확인 중입니다…</p>
           )}
 
-          {!error && result && !isCalculating && (
+          {!error && result && (
             <>
               <div className="mb-6">
                 <ResultRow label="채권 현재가격" value={fmtKRW(result.P)} highlight
@@ -273,9 +273,11 @@ export default function BondCalculator() {
         </div>
       </div>
 
-      {/* 하단: 가격 곡선 차트 */}
-      {!error && result && !isCalculating && (
-        <PriceCurveChart face={face} coupon={coupon} years={years} freq={freq} ytm={ytm} />
+      {/* 하단: 가격 곡선 차트 — 디바운스된 값만 사용, 대기 중엔 흐리게 유지 */}
+      {!error && result && (
+        <div className={`transition-opacity duration-300 ${isCalculating ? 'opacity-50' : 'opacity-100'}`}>
+          <PriceCurveChart face={dFace} coupon={dCoupon} years={dYears} freq={dFreq} ytm={dYtm} />
+        </div>
       )}
     </div>
   )
