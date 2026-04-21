@@ -2,9 +2,9 @@ import { useState, useMemo, useCallback } from 'react'
 import './index.css'
 
 import Dashboard      from './components/Dashboard'
-import BondCalculator from './components/BondCalculator'
-import StockValuation from './components/StockValuation'
-import PortfolioRisk  from './components/PortfolioRisk'
+import BondCalculator, { DEFAULT_BOND } from './components/BondCalculator'
+import StockValuation, { DEFAULT_STOCK } from './components/StockValuation'
+import PortfolioRisk, { generateSampleReturns, DEFAULT_HOLDINGS } from './components/PortfolioRisk'
 import TaxEntry       from './components/TaxEntry'
 import TaxValidator   from './components/TaxValidator'
 import TaxReport      from './components/TaxReport'
@@ -64,11 +64,15 @@ export default function App() {
   const [activeTaxTab,     setActiveTaxTab]     = useState('entry')
 
   // 도메인 데이터
-  const [transactions,   setTransactions]   = useState([])
-  const [taxResults,     setTaxResults]     = useState([])
-  const [taxHeader,      setTaxHeader]      = useState({ company: '', taxYear: 2025 })
-  const [portfolioValue, setPortfolioValue] = useState(0)
-  const [portfolioVaR,   setPortfolioVaR]   = useState(0)   // percent (95% VaR)
+  const [transactions,         setTransactions]         = useState([])
+  const [taxResults,           setTaxResults]           = useState([])
+  const [taxHeader,            setTaxHeader]            = useState({ company: '', taxYear: 2025 })
+  const [portfolioValue,       setPortfolioValue]       = useState(0)
+  const [portfolioVaR,         setPortfolioVaR]         = useState(0)   // percent (95% VaR)
+  const [portfolioHoldings,    setPortfolioHoldings]    = useState(DEFAULT_HOLDINGS)
+  const [portfolioReturnsText, setPortfolioReturnsText] = useState(() => generateSampleReturns())
+  const [stock,                setStock]                = useState(DEFAULT_STOCK)
+  const [bond,                 setBond]                 = useState(DEFAULT_BOND)
 
   // 계산 이력 (최대 20건, 같은 type은 upsert)
   const [calcHistory, setCalcHistory] = useState([])
@@ -204,12 +208,30 @@ export default function App() {
               />
             )}
 
-            {activeFinanceTab === 'bond' && <BondCalculator onCalculate={addHistory} />}
+            {activeFinanceTab === 'bond' && (
+              <BondCalculator
+                onCalculate={addHistory}
+                bond={bond}
+                setBond={setBond}
+              />
+            )}
 
-            {activeFinanceTab === 'stock' && <StockValuation onCalculate={addHistory} />}
+            {activeFinanceTab === 'stock' && (
+              <StockValuation
+                onCalculate={addHistory}
+                stock={stock}
+                setStock={setStock}
+              />
+            )}
 
             {activeFinanceTab === 'portfolio' && (
-              <PortfolioRisk onUpdate={handlePortfolioUpdate} />
+              <PortfolioRisk
+                onUpdate={handlePortfolioUpdate}
+                holdings={portfolioHoldings}
+                setHoldings={setPortfolioHoldings}
+                returnsText={portfolioReturnsText}
+                setReturnsText={setPortfolioReturnsText}
+              />
             )}
           </>
         )}

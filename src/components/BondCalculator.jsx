@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useDebounce } from '../hooks/useDebounce'
 import {
   Chart as ChartJS,
@@ -143,14 +143,16 @@ function PriceCurveChart({ face, coupon, years, freq, ytm }) {
   )
 }
 
+export const DEFAULT_BOND = { face: 1000000, coupon: 5, years: 3, ytm: 4, freq: 1 }
+
 // ── 메인 컴포넌트 ──────────────────────────────────────────
-export default function BondCalculator({ onCalculate }) {
-  // 라이브 입력값 (즉시 반영 — 입력 UI 전용)
-  const [face,   setFace]   = useState(1000000)
-  const [coupon, setCoupon] = useState(5)
-  const [years,  setYears]  = useState(3)
-  const [ytm,    setYtm]    = useState(4)
-  const [freq,   setFreq]   = useState(1)
+export default function BondCalculator({ onCalculate, bond, setBond }) {
+  const { face, coupon, years, ytm, freq } = bond
+  const setFace   = (v) => setBond((b) => ({ ...b, face: v }))
+  const setCoupon = (v) => setBond((b) => ({ ...b, coupon: v }))
+  const setYears  = (v) => setBond((b) => ({ ...b, years: v }))
+  const setYtm    = (v) => setBond((b) => ({ ...b, ytm: v }))
+  const setFreq   = (v) => setBond((b) => ({ ...b, freq: v }))
 
   // 5개 파라미터를 하나의 키로 묶어서 디바운스
   const paramsKey = `${face}|${coupon}|${years}|${ytm}|${freq}`
@@ -173,9 +175,7 @@ export default function BondCalculator({ onCalculate }) {
   const upDelta   = result ? -result.modified * result.P * 0.01 : null
   const downDelta = result ?  result.modified * result.P * 0.01 : null
 
-  const firstCalc = useRef(true)
   useEffect(() => {
-    if (firstCalc.current) { firstCalc.current = false; return }
     if (!result) return
     onCalculate?.({
       name: '채권',

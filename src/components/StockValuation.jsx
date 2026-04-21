@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import Tooltip        from './ui/Tooltip'
 import FormattedInput from './ui/FormattedInput'
 
@@ -122,14 +122,24 @@ function Field({ label, unit, children }) {
   )
 }
 
+export const DEFAULT_STOCK = {
+  name: '삼성전자',
+  price: 74000,
+  eps: 5000,
+  growth: 8,
+  required: 10,
+  sectorPER: 15,
+}
+
 // ── 메인 컴포넌트 ──────────────────────────────────────────
-export default function StockValuation({ onCalculate }) {
-  const [name,      setName]      = useState('삼성전자')
-  const [price,     setPrice]     = useState(74000)
-  const [eps,       setEps]       = useState(5000)
-  const [growth,    setGrowth]    = useState(8)
-  const [required,  setRequired]  = useState(10)
-  const [sectorPER, setSectorPER] = useState(15)
+export default function StockValuation({ onCalculate, stock, setStock }) {
+  const { name, price, eps, growth, required, sectorPER } = stock
+  const setName      = (v) => setStock((s) => ({ ...s, name: v }))
+  const setPrice     = (v) => setStock((s) => ({ ...s, price: v }))
+  const setEps       = (v) => setStock((s) => ({ ...s, eps: v }))
+  const setGrowth    = (v) => setStock((s) => ({ ...s, growth: v }))
+  const setRequired  = (v) => setStock((s) => ({ ...s, required: v }))
+  const setSectorPER = (v) => setStock((s) => ({ ...s, sectorPER: v }))
 
   const { ivA, ivB, ddmWarning } = useMemo(
     () => calcValuation(eps, growth, required, sectorPER),
@@ -143,9 +153,7 @@ export default function StockValuation({ onCalculate }) {
 
   const validInputs = price > 0 && eps > 0
 
-  const firstCalc = useRef(true)
   useEffect(() => {
-    if (firstCalc.current) { firstCalc.current = false; return }
     if (!validInputs) return
     const v = getVerdict(price, ivA)
     onCalculate?.({

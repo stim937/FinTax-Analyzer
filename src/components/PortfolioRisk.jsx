@@ -217,13 +217,15 @@ function ReturnHistogram({ returnsPct, var95pct, var99pct }) {
 // ── 메인 컴포넌트 ──────────────────────────────────────────
 let _nextId = 4
 
-export default function PortfolioRisk({ onUpdate }) {
-  const [holdings, setHoldings] = useState([
-    { id: 1, name: '삼성전자',  qty: 10, price: 74000  },
-    { id: 2, name: 'SK하이닉스', qty: 5,  price: 180000 },
-    { id: 3, name: 'NAVER',     qty: 3,  price: 210000 },
-  ])
-  const [returnsText, setReturnsText] = useState(() => generateSampleReturns())
+export { generateSampleReturns }
+
+export const DEFAULT_HOLDINGS = [
+  { id: 1, name: '삼성전자',  qty: 10, price: 74000  },
+  { id: 2, name: 'SK하이닉스', qty: 5,  price: 180000 },
+  { id: 3, name: 'NAVER',     qty: 3,  price: 210000 },
+]
+
+export default function PortfolioRisk({ onUpdate, holdings, setHoldings, returnsText, setReturnsText }) {
 
   // ── 포트폴리오 계산 ────────────────────────────────────
   const totalValue = useMemo(
@@ -390,21 +392,21 @@ export default function PortfolioRisk({ onUpdate }) {
               <div className="grid grid-cols-2 gap-3">
                 {/* 95% VaR */}
                 <div className="bg-white rounded-xl shadow-sm p-4 border-t-4 border-orange-400">
-                  <p className="text-xs font-semibold text-orange-500 mb-2">
+                  <span className="text-xs font-semibold text-orange-500 mb-2 block">
                     <UITooltip text="95% VaR — 정상 시장 환경에서 하루 손실이 이 금액을 초과할 확률이 5%임을 의미합니다.">
                       95% VaR (신뢰수준)
                     </UITooltip>
-                  </p>
+                  </span>
                   <p className="text-xl font-extrabold text-gray-800">{fmtKRW(varResult.var95)}</p>
                   <p className="text-sm text-gray-500 mt-0.5">{fmtPct(varResult.var95pct)}</p>
                 </div>
                 {/* 99% VaR */}
                 <div className="bg-white rounded-xl shadow-sm p-4 border-t-4 border-red-500">
-                  <p className="text-xs font-semibold text-red-500 mb-2">
+                  <span className="text-xs font-semibold text-red-500 mb-2 block">
                     <UITooltip text="99% VaR — 손실이 이 금액을 초과할 확률이 1%로, 95% VaR보다 극단적 리스크 시나리오를 나타냅니다.">
                       99% VaR (신뢰수준)
                     </UITooltip>
-                  </p>
+                  </span>
                   <p className="text-xl font-extrabold text-gray-800">{fmtKRW(varResult.var99)}</p>
                   <p className="text-sm text-gray-500 mt-0.5">{fmtPct(varResult.var99pct)}</p>
                 </div>
