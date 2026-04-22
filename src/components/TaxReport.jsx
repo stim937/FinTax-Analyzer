@@ -190,7 +190,7 @@ export default function TaxReport({ taxResults = [], taxYear = 2025, company = '
             onClick={() => window.print()}
             className="flex items-center gap-2 px-4 py-2 rounded-lg bg-navy text-white text-sm font-semibold hover:bg-midblue transition shadow-sm"
           >
-            🖨️ 인쇄 (A4)
+            🖨️ 인쇄 / PDF 저장
           </button>
         </div>
 

@@ -146,6 +146,8 @@ function PriceCurveChart({ face, coupon, years, freq, ytm }) {
 export const DEFAULT_BOND = { face: 1000000, coupon: 5, years: 3, ytm: 4, freq: 1 }
 
 // ── 메인 컴포넌트 ──────────────────────────────────────────
+const BOND_TYPES = ['국고채3년', '국고채5년', '국고채10년', 'CD91일']
+
 export default function BondCalculator({ onCalculate, bond, setBond }) {
   const { face, coupon, years, ytm, freq } = bond
   const setFace   = (v) => setBond((b) => ({ ...b, face: v }))
@@ -153,6 +155,29 @@ export default function BondCalculator({ onCalculate, bond, setBond }) {
   const setYears  = (v) => setBond((b) => ({ ...b, years: v }))
   const setYtm    = (v) => setBond((b) => ({ ...b, ytm: v }))
   const setFreq   = (v) => setBond((b) => ({ ...b, freq: v }))
+
+  const [bondType, setBondType]       = useState('국고채3년')
+  const [fetchingRate, setFetchingRate] = useState(false)
+  const [fetchRateMsg, setFetchRateMsg] = useState('')
+
+  const handleFetchRate = async () => {
+    setFetchingRate(true)
+    setFetchRateMsg('')
+    try {
+      const res  = await fetch(`/api/market/bond?type=${encodeURIComponent(bondType)}`)
+      const data = await res.json()
+      if (data.rate) {
+        setYtm(data.rate)
+        setFetchRateMsg(data.mock ? `Mock: ${data.rate}%` : `실시간: ${data.rate}% (${data.date})`)
+      } else {
+        setFetchRateMsg(`오류: ${data.error ?? '알 수 없는 오류'}`)
+      }
+    } catch {
+      setFetchRateMsg('네트워크 오류')
+    } finally {
+      setFetchingRate(false)
+    }
+  }
 
   // 5개 파라미터를 하나의 키로 묶어서 디바운스
   const paramsKey = `${face}|${coupon}|${years}|${ytm}|${freq}`
@@ -209,6 +234,35 @@ export default function BondCalculator({ onCalculate, bond, setBond }) {
             <FormattedInput className={inputCls} value={years} min={1} step={1}
               onChange={(v) => setYears(Math.max(1, Math.floor(v)))} />
           </InputField>
+
+          {/* 채권 유형 + API 조회 */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
+              채권 유형 <span className="font-normal normal-case text-gray-400">(금리 자동 입력)</span>
+            </label>
+            <div className="flex gap-2 items-center">
+              <select
+                className={`${inputCls} flex-1`}
+                value={bondType}
+                onChange={(e) => setBondType(e.target.value)}
+              >
+                {BOND_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
+              <button
+                onClick={handleFetchRate}
+                disabled={fetchingRate}
+                className="flex items-center gap-1.5 px-3 py-2 bg-navy text-white text-xs font-semibold rounded-lg hover:bg-midblue disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap transition"
+              >
+                {fetchingRate ? <Spinner size="xs" label="" /> : '📡'}
+                금리 조회
+              </button>
+            </div>
+            {fetchRateMsg && (
+              <p className={`mt-1.5 text-xs ${fetchRateMsg.startsWith('실시간') ? 'text-green-600' : fetchRateMsg.startsWith('Mock') ? 'text-blue-500' : 'text-red-500'}`}>
+                {fetchRateMsg}
+              </p>
+            )}
+          </div>
 
           <InputField label="시장금리 YTM" unit="%">
             <FormattedInput className={inputCls} value={ytm} min={0.01} step={0.1}

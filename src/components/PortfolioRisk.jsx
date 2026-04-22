@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from 'react'
 import UITooltip      from './ui/Tooltip'
 import FormattedInput from './ui/FormattedInput'
+import Spinner        from './ui/Spinner'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -181,8 +182,8 @@ function ReturnHistogram({ returnsPct, var95pct, var99pct }) {
           font: { size: 11 },
           maxTicksLimit: 12,
           callback: (_, i) => {
-            const v = parseFloat(hist.labels[i])
-            return Number.isInteger(v) ? `${v}%` : ''
+            const label = hist.labels[i]
+            return label ? `${label}%` : ''
           },
         },
         title: {
@@ -220,12 +221,40 @@ let _nextId = 4
 export { generateSampleReturns }
 
 export const DEFAULT_HOLDINGS = [
-  { id: 1, name: '삼성전자',  qty: 10, price: 74000  },
-  { id: 2, name: 'SK하이닉스', qty: 5,  price: 180000 },
-  { id: 3, name: 'NAVER',     qty: 3,  price: 210000 },
+  { id: 1, name: '삼성전자',  ticker: '005930', qty: 10, price: 74000  },
+  { id: 2, name: 'SK하이닉스', ticker: '000660', qty: 5,  price: 180000 },
+  { id: 3, name: 'NAVER',     ticker: '035420', qty: 3,  price: 210000 },
 ]
 
 export default function PortfolioRisk({ onUpdate, holdings, setHoldings, returnsText, setReturnsText }) {
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshMsg, setRefreshMsg] = useState('')
+
+  const handleRefreshPrices = async () => {
+    setRefreshing(true)
+    setRefreshMsg('')
+    try {
+      const updated = await Promise.all(
+        holdings.map(async (h) => {
+          if (!h.ticker) return h
+          try {
+            const res  = await fetch(`/api/market/stock?ticker=${h.ticker}`)
+            const data = await res.json()
+            return data.price ? { ...h, price: data.price } : h
+          } catch (_) {
+            return h
+          }
+        }),
+      )
+      setHoldings(updated)
+      setRefreshMsg('시세 업데이트 완료')
+    } catch (_) {
+      setRefreshMsg('업데이트 실패')
+    } finally {
+      setRefreshing(false)
+      setTimeout(() => setRefreshMsg(''), 3000)
+    }
+  }
 
   // ── 포트폴리오 계산 ────────────────────────────────────
   const totalValue = useMemo(
@@ -270,7 +299,7 @@ export default function PortfolioRisk({ onUpdate, holdings, setHoldings, returns
   const addRow = () => {
     setHoldings((prev) => [
       ...prev,
-      { id: _nextId++, name: '', qty: 1, price: 0 },
+      { id: _nextId++, name: '', ticker: '', qty: 1, price: 0 },
     ])
   }
 
@@ -285,12 +314,27 @@ export default function PortfolioRisk({ onUpdate, holdings, setHoldings, returns
         <div className="bg-white rounded-xl shadow-sm p-6">
           <div className="flex items-center justify-between border-b border-gray-100 pb-3 mb-4">
             <h2 className="text-base font-semibold text-gray-700">포트폴리오 구성</h2>
-            <button
-              onClick={addRow}
-              className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-navy text-white text-xs font-semibold hover:bg-midblue transition"
-            >
-              <span className="text-base leading-none">+</span> 종목 추가
-            </button>
+            <div className="flex items-center gap-2">
+              {refreshMsg && (
+                <span className={`text-xs ${refreshMsg.includes('실패') ? 'text-red-500' : 'text-emerald-600'}`}>
+                  {refreshMsg}
+                </span>
+              )}
+              <button
+                onClick={handleRefreshPrices}
+                disabled={refreshing}
+                title="종목코드로 실시간 시세 조회"
+                className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-midblue text-midblue text-xs font-semibold hover:bg-accent transition disabled:opacity-40"
+              >
+                {refreshing ? <Spinner size="sm" label="" /> : '📡'} 시세 갱신
+              </button>
+              <button
+                onClick={addRow}
+                className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-navy text-white text-xs font-semibold hover:bg-midblue transition"
+              >
+                <span className="text-base leading-none">+</span> 종목 추가
+              </button>
+            </div>
           </div>
 
           <div className="overflow-x-auto">
@@ -298,6 +342,7 @@ export default function PortfolioRisk({ onUpdate, holdings, setHoldings, returns
               <thead>
                 <tr className="text-xs font-semibold text-gray-400 uppercase tracking-wide">
                   <th className="text-left pb-2 pr-2">종목명</th>
+                  <th className="text-left pb-2 px-1 w-20">종목코드</th>
                   <th className="text-right pb-2 px-2">수량</th>
                   <th className="text-right pb-2 px-2">현재가(원)</th>
                   <th className="text-right pb-2 px-2">비중(%)</th>
@@ -314,6 +359,16 @@ export default function PortfolioRisk({ onUpdate, holdings, setHoldings, returns
                         value={h.name}
                         placeholder="종목명"
                         onChange={(e) => updateHolding(h.id, 'name', e.target.value)}
+                      />
+                    </td>
+                    <td className="py-2 px-1">
+                      <input
+                        type="text"
+                        className={`${inputCls} text-center`}
+                        value={h.ticker ?? ''}
+                        placeholder="000000"
+                        maxLength={6}
+                        onChange={(e) => updateHolding(h.id, 'ticker', e.target.value.replace(/\D/g, ''))}
                       />
                     </td>
                     <td className="py-2 px-2">

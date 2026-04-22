@@ -1,6 +1,7 @@
-import { useState, useMemo, useEffect } from 'react'
-import Tooltip        from './ui/Tooltip'
+import { useEffect, useMemo, useState } from 'react'
 import FormattedInput from './ui/FormattedInput'
+import Spinner from './ui/Spinner'
+import Tooltip from './ui/Tooltip'
 
 // ── 계산 로직 ──────────────────────────────────────────────
 function calcValuation(eps, growth, required, sectorPER) {
@@ -53,7 +54,7 @@ function ValuationGauge({ price, ivA, ivB }) {
 
   return (
     <div className="mt-2">
-      <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">
+      <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-7">
         가격 위치 게이지
       </p>
 
@@ -98,7 +99,7 @@ function ValuationGauge({ price, ivA, ivB }) {
         </div>
       </div>
 
-      <div className="flex justify-between text-[10px] text-gray-400 mt-6 px-2">
+      <div className="flex justify-between text-[10px] text-gray-400 mt-9 px-2">
         <span>{fmtKRW(rangeMin)}</span>
         <span>{fmtKRW(rangeMax)}</span>
       </div>
@@ -123,23 +124,83 @@ function Field({ label, unit, children }) {
 }
 
 export const DEFAULT_STOCK = {
-  name: '삼성전자',
-  price: 74000,
-  eps: 5000,
-  growth: 8,
-  required: 10,
+  name:      '',
+  ticker:    '',
+  price:     0,
+  eps:       0,
+  growth:    8,
+  required:  10,
   sectorPER: 15,
 }
 
 // ── 메인 컴포넌트 ──────────────────────────────────────────
 export default function StockValuation({ onCalculate, stock, setStock }) {
-  const { name, price, eps, growth, required, sectorPER } = stock
+  const { name, ticker, price, eps, growth, required, sectorPER } = stock
   const setName      = (v) => setStock((s) => ({ ...s, name: v }))
+  const setTicker    = (v) => setStock((s) => ({ ...s, ticker: v }))
   const setPrice     = (v) => setStock((s) => ({ ...s, price: v }))
   const setEps       = (v) => setStock((s) => ({ ...s, eps: v }))
   const setGrowth    = (v) => setStock((s) => ({ ...s, growth: v }))
   const setRequired  = (v) => setStock((s) => ({ ...s, required: v }))
   const setSectorPER = (v) => setStock((s) => ({ ...s, sectorPER: v }))
+
+  const [fetchMsg,  setFetchMsg]  = useState('')
+  const [kisData,   setKisData]  = useState(null) // { per, pbr, bps, mock }
+  const [lookingUp, setLookingUp] = useState(false)
+
+  // 종목코드 6자리 입력 후 blur → 종목명/시세 자동 입력
+  const handleTickerBlur = async (val) => {
+    if (!/^\d{6}$/.test(val)) return
+    setLookingUp(true)
+    setFetchMsg('')
+    try {
+      // 1단계: search API로 종목명 조회 (stocks.json 전체 활용)
+      const searchRes = await fetch(`/api/market/search?q=${val}`)
+      const searchData = await searchRes.json()
+      if (searchData.name && searchData.name !== val) setName(searchData.name)
+
+      // 2단계: stock API로 가격/재무지표 조회
+      const res  = await fetch(`/api/market/stock?ticker=${val}`)
+      const data = await res.json()
+      if (data.price) setPrice(data.price)
+      if (data.eps > 0) setEps(data.eps)
+      if (data.per > 0 || data.pbr > 0) {
+        setKisData({ per: data.per ?? 0, pbr: data.pbr ?? 0, bps: data.bps ?? 0, mock: !!data.mock })
+      }
+      if (data.error) setFetchMsg(data.error)
+    } catch (_) {
+      setFetchMsg('조회 실패')
+    } finally { setLookingUp(false) }
+  }
+
+  // 종목명 입력 후 blur → 종목코드/시세 자동 입력
+  const handleNameBlur = async (val) => {
+    const trimmed = val.trim()
+    if (!trimmed) return
+    setLookingUp(true)
+    setFetchMsg('')
+    try {
+      const res  = await fetch(`/api/market/search?q=${encodeURIComponent(trimmed)}`)
+      const data = await res.json()
+      
+      if (data.ticker) {
+        setTicker(data.ticker)
+        // 코드를 찾았으니 시세도 연달아 조회
+        const detailRes = await fetch(`/api/market/stock?ticker=${data.ticker}`)
+        const detailData = await detailRes.json()
+        if (detailData.name) setName(detailData.name) // 정확한 명칭으로 업데이트
+        if (detailData.price) setPrice(detailData.price)
+        if (detailData.eps > 0) setEps(detailData.eps)
+        if (detailData.per > 0 || detailData.pbr > 0) {
+          setKisData({ per: detailData.per ?? 0, pbr: detailData.pbr ?? 0, bps: detailData.bps ?? 0, mock: !!detailData.mock })
+        }
+      } else {
+        setFetchMsg(data.error ?? '종목을 찾을 수 없습니다')
+      }
+    } catch (_) {
+      setFetchMsg('검색 실패')
+    } finally { setLookingUp(false) }
+  }
 
   const { ivA, ivB, ddmWarning } = useMemo(
     () => calcValuation(eps, growth, required, sectorPER),
@@ -171,22 +232,73 @@ export default function StockValuation({ onCalculate, stock, setStock }) {
           종목 정보 입력
         </h2>
 
-        <Field label="종목명">
-          <input
-            type="text"
-            className={inputCls}
-            value={name}
-            placeholder="예: 삼성전자"
-            onChange={(e) => setName(e.target.value)}
-          />
-        </Field>
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="종목명">
+            <div className="relative">
+              <input
+                type="text"
+                className={inputCls}
+                value={name}
+                placeholder="예: 삼성전자"
+                onChange={(e) => {
+                  setName(e.target.value)
+                  setTicker('') // 이름 입력 시 코드 초기화
+                }}
+                onBlur={(e) => handleNameBlur(e.target.value)}
+              />
+              {lookingUp && (
+                <span className="absolute right-2 top-1/2 -translate-y-1/2">
+                  <Spinner size="xs" label="" />
+                </span>
+              )}
+            </div>
+          </Field>
+          <Field label="종목코드">
+            <div className="relative">
+              <input
+                type="text"
+                className={inputCls}
+                value={ticker ?? ''}
+                placeholder="예: 005930"
+                maxLength={6}
+                onChange={(e) => {
+                  setTicker(e.target.value.replace(/\D/g, ''))
+                  setName('') // 코드 입력 시 이름 초기화
+                }}
+                onBlur={(e) => handleTickerBlur(e.target.value)}
+              />
+              {lookingUp && (
+                <span className="absolute right-2 top-1/2 -translate-y-1/2">
+                  <Spinner size="xs" label="" />
+                </span>
+              )}
+            </div>
+          </Field>
+        </div>
 
         <Field label="현재 주가" unit="원">
-          <FormattedInput className={inputCls} value={price} min={1} onChange={setPrice} />
+          <FormattedInput
+            className={`${inputCls} bg-gray-50 cursor-default select-none`}
+            value={price}
+            min={1}
+            onChange={setPrice}
+            readOnly
+          />
+          {fetchMsg && (
+            <p className={`text-xs mt-1 ${fetchMsg.includes('실패') || fetchMsg.includes('오류') ? 'text-red-500' : 'text-emerald-600'}`}>
+              {fetchMsg}
+            </p>
+          )}
         </Field>
 
         <Field label={<Tooltip text="주당순이익(EPS) — 당기순이익을 발행 주식 수로 나눈 값. PER 계산의 기준이 됩니다.">EPS 주당순이익</Tooltip>} unit="원">
-          <FormattedInput className={inputCls} value={eps} min={1} onChange={setEps} />
+          <FormattedInput
+            className={`${inputCls} bg-gray-50 cursor-default select-none`}
+            value={eps}
+            min={1}
+            onChange={setEps}
+            readOnly
+          />
         </Field>
 
         <div className="grid grid-cols-2 gap-4">
@@ -213,6 +325,44 @@ export default function StockValuation({ onCalculate, stock, setStock }) {
 
       {/* ── 결과 패널 ── */}
       <div className="space-y-5">
+
+        {/* KIS 재무지표 카드 */}
+        {kisData && (
+          <div className="bg-white rounded-xl shadow-sm p-5">
+            <div className="flex items-center justify-between border-b border-gray-100 pb-3 mb-4">
+              <h2 className="text-base font-semibold text-gray-700">KIS 재무지표</h2>
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${kisData.mock ? 'bg-blue-50 text-blue-500' : 'bg-emerald-50 text-emerald-600'}`}>
+                {kisData.mock ? 'Mock' : '실시간'}
+              </span>
+            </div>
+            <div className="grid grid-cols-3 gap-3 text-center">
+              <div className="bg-gray-50 rounded-lg p-3">
+                <p className="text-xs text-gray-400 mb-1">PER</p>
+                <p className="font-bold text-gray-800 text-sm">
+                  {kisData.per > 0 ? `${kisData.per.toFixed(2)}배` : '—'}
+                </p>
+              </div>
+              <div className="bg-gray-50 rounded-lg p-3">
+                <p className="text-xs text-gray-400 mb-1">PBR</p>
+                <p className="font-bold text-gray-800 text-sm">
+                  {kisData.pbr > 0 ? `${kisData.pbr.toFixed(2)}배` : '—'}
+                </p>
+              </div>
+              <div className="bg-gray-50 rounded-lg p-3">
+                <p className="text-xs text-gray-400 mb-1">BPS</p>
+                <p className="font-bold text-gray-800 text-sm">
+                  {kisData.bps > 0 ? `₩${kisData.bps.toLocaleString('ko-KR')}` : '—'}
+                </p>
+              </div>
+            </div>
+            {kisData.mock && (
+              <p className="text-xs text-gray-400 mt-3 text-center">
+                실시간 재무지표는 실전투자 계정 API 키 필요
+              </p>
+            )}
+          </div>
+        )}
+
         {/* 판정 배너 */}
         {validInputs && (
           <div className={`rounded-xl border-2 ${verdict.bg} ${verdict.border} p-5 flex items-center justify-between`}>
@@ -256,22 +406,28 @@ export default function StockValuation({ onCalculate, stock, setStock }) {
           </div>
 
           {/* 업사이드 */}
-          <div className="flex gap-3">
-            <div className="flex-1 border border-gray-100 rounded-lg p-3">
-              <p className="text-xs text-gray-400 mb-1">PER법 업사이드</p>
-              <p className={`font-bold text-sm ${upsideA >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                {fmtPct(upsideA)}
-              </p>
-            </div>
-            {upsideB != null && (
+          {validInputs ? (
+            <div className="flex gap-3">
               <div className="flex-1 border border-gray-100 rounded-lg p-3">
-                <p className="text-xs text-gray-400 mb-1">DDM 업사이드</p>
-                <p className={`font-bold text-sm ${upsideB >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                  {fmtPct(upsideB)}
+                <p className="text-xs text-gray-400 mb-1">PER법 업사이드</p>
+                <p className={`font-bold text-sm ${upsideA >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                  {fmtPct(upsideA)}
                 </p>
               </div>
-            )}
-          </div>
+              {upsideB != null && (
+                <div className="flex-1 border border-gray-100 rounded-lg p-3">
+                  <p className="text-xs text-gray-400 mb-1">DDM 업사이드</p>
+                  <p className={`font-bold text-sm ${upsideB >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                    {fmtPct(upsideB)}
+                  </p>
+                </div>
+              )}
+            </div>
+          ) : (
+            <p className="text-sm text-gray-400 text-center py-2">
+              종목명 또는 종목코드를 입력해 주세요
+            </p>
+          )}
 
           {/* 내재가치 범위 요약 */}
           <div className="bg-gray-50 rounded-lg px-4 py-3 text-sm text-gray-600">

@@ -6,7 +6,7 @@ import { useState } from 'react'
  */
 export default function FormattedInput({
   value, onChange, className = '',
-  min, step = 1, placeholder, disabled,
+  min, step = 1, placeholder, disabled, readOnly,
 }) {
   // 편집 중에만 사용하는 로컬 문자열 (포맷 없는 순수 입력값)
   const [localStr, setLocalStr] = useState(null)
@@ -56,10 +56,11 @@ export default function FormattedInput({
       value={displayValue}
       placeholder={placeholder ?? '0'}
       disabled={disabled}
-      onFocus={handleFocus}
-      onBlur={handleBlur}
-      onChange={handleChange}
-      onWheel={handleWheel}
+      readOnly={readOnly}
+      onFocus={readOnly ? undefined : handleFocus}
+      onBlur={readOnly ? undefined : handleBlur}
+      onChange={readOnly ? undefined : handleChange}
+      onWheel={readOnly ? undefined : handleWheel}
     />
   )
 }
