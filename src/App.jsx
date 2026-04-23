@@ -93,34 +93,67 @@ function serializePortfolioSnapshot(holdings) {
   return JSON.stringify(buildPortfolioSnapshot(holdings))
 }
 
+async function fetchLivePrice(ticker) {
+  const response = await fetch(`/api/market/stock?ticker=${encodeURIComponent(ticker)}`)
+  const data = await response.json()
+
+  if (!response.ok || !Number(data?.price)) {
+    throw new Error(data?.error || '현재가 조회 실패')
+  }
+
+  return data
+}
+
+async function fetchLivePriceWithRetry(ticker, attempts = 3) {
+  let lastError = null
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await fetchLivePrice(ticker)
+    } catch (error) {
+      lastError = error
+
+      if (attempt < attempts - 1) {
+        await new Promise((resolve) => {
+          setTimeout(resolve, 180 * (attempt + 1))
+        })
+      }
+    }
+  }
+
+  throw lastError ?? new Error('현재가 조회 실패')
+}
+
 async function attachLivePrices(holdings) {
   const normalized = normalizeHoldings(holdings)
-  const priced = []
+  const priced = [...normalized]
+  const concurrency = 2
 
-  for (const holding of normalized) {
-    if (!holding.ticker) {
-      priced.push(holding)
-      continue
-    }
+  async function worker(startIndex) {
+    for (let index = startIndex; index < normalized.length; index += concurrency) {
+      const holding = normalized[index]
 
-    try {
-      const response = await fetch(`/api/market/stock?ticker=${encodeURIComponent(holding.ticker)}`)
-      const data = await response.json()
-
-      if (!response.ok || !Number(data?.price)) {
-        priced.push({ ...holding, currentPrice: 0 })
+      if (!holding?.ticker) {
+        priced[index] = holding
         continue
       }
 
-      priced.push({
-        ...holding,
-        name: data.name || holding.name,
-        currentPrice: Number(data.price),
-      })
-    } catch {
-      priced.push({ ...holding, currentPrice: 0 })
+      try {
+        const data = await fetchLivePriceWithRetry(holding.ticker)
+        priced[index] = {
+          ...holding,
+          name: data.name || holding.name,
+          currentPrice: Number(data.price),
+        }
+      } catch {
+        priced[index] = { ...holding, currentPrice: 0 }
+      }
     }
   }
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, normalized.length || 1) }, (_, index) => worker(index)),
+  )
 
   return priced
 }
@@ -386,11 +419,40 @@ export default function App() {
     loadedUserDataRef.current = user.id
 
     async function loadUserData() {
-      const { data: txData } = await supabase
+      const transactionsTask = supabase
         .from('transactions')
         .select('*')
         .eq('user_id', user.id)
         .order('date', { ascending: true })
+
+      const historyTask = supabase
+        .from('calc_history')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(20)
+
+      const taxHeaderTask = Promise.resolve().then(() => {
+        try {
+          const savedHeader = localStorage.getItem(`taxHeader_${user.id}`)
+          if (savedHeader) {
+            setTaxHeader(JSON.parse(savedHeader))
+          }
+        } catch (error) {
+          console.warn('[TaxHeader] 저장된 헤더를 복원하지 못했습니다.', error)
+        }
+      })
+
+      const [
+        { data: txData },
+        { data: histData },
+      ] = await Promise.all([
+        transactionsTask,
+        historyTask,
+        taxHeaderTask,
+        restorePortfolio(user.id),
+        restorePortfolioReturns(user.id),
+      ])
 
       if (txData && txData.length > 0) {
         const txs = txData.map((row) => ({
@@ -406,13 +468,6 @@ export default function App() {
         setTransactions(txs)
         setTaxResults(analyzeTax(txs))
       }
-
-      const { data: histData } = await supabase
-        .from('calc_history')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false })
-        .limit(20)
 
       if (histData && histData.length > 0) {
         const seen = new Set()
@@ -434,20 +489,6 @@ export default function App() {
             })),
         )
       }
-
-      try {
-        const savedHeader = localStorage.getItem(`taxHeader_${user.id}`)
-        if (savedHeader) {
-          setTaxHeader(JSON.parse(savedHeader))
-        }
-      } catch (error) {
-        console.warn('[TaxHeader] 저장된 헤더를 복원하지 못했습니다.', error)
-      }
-
-      await Promise.all([
-        restorePortfolio(user.id),
-        restorePortfolioReturns(user.id),
-      ])
     }
 
     void loadUserData()
