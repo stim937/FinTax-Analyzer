@@ -70,6 +70,37 @@ function normalizeHoldings(holdings) {
     ))
 }
 
+async function attachLivePrices(holdings) {
+  const normalized = normalizeHoldings(holdings)
+
+  const priced = await Promise.all(
+    normalized.map(async (holding) => {
+      if (!holding.ticker) {
+        return holding
+      }
+
+      try {
+        const response = await fetch(`/api/market/stock?ticker=${encodeURIComponent(holding.ticker)}`)
+        const data = await response.json()
+
+        if (!response.ok || !Number(data?.price)) {
+          return { ...holding, currentPrice: 0 }
+        }
+
+        return {
+          ...holding,
+          name: data.name || holding.name,
+          currentPrice: Number(data.price),
+        }
+      } catch {
+        return { ...holding, currentPrice: 0 }
+      }
+    }),
+  )
+
+  return priced
+}
+
 function formatDateTime(value) {
   if (!value) {
     return ''
@@ -186,7 +217,7 @@ export default function App() {
       return
     }
 
-    const restoredHoldings = normalizeHoldings(data.holdings)
+    const restoredHoldings = await attachLivePrices(data.holdings)
     setPortfolioHoldings(restoredHoldings)
     setPortfolioReturnsText('')
     setPortfolioValue(0)
@@ -361,7 +392,7 @@ export default function App() {
 
     const payload = {
       user_id: user.id,
-      holdings: sanitizedHoldings,
+      holdings: sanitizedHoldings.map(({ currentPrice, ...holding }) => holding),
     }
 
     const { data, error } = await supabase

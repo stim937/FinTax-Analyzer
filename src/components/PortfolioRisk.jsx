@@ -5,6 +5,7 @@ import Spinner from './ui/Spinner'
 import { generateSampleReturns } from './portfolioDefaults'
 import {
   Chart as ChartJS,
+  ArcElement,
   CategoryScale,
   LinearScale,
   BarElement,
@@ -13,9 +14,9 @@ import {
   Legend,
 } from 'chart.js'
 import AnnotationPlugin from 'chartjs-plugin-annotation'
-import { Bar } from 'react-chartjs-2'
+import { Bar, Doughnut } from 'react-chartjs-2'
 
-ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend, AnnotationPlugin)
+ChartJS.register(ArcElement, CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend, AnnotationPlugin)
 
 function calcVaR(returns, portfolioValue) {
   const sorted = [...returns].sort((a, b) => a - b)
@@ -215,6 +216,8 @@ function ReturnHistogram({ returnsPct, var95pct, var99pct }) {
   )
 }
 
+const DONUT_COLORS = ['#1D4ED8', '#0F766E', '#F97316', '#7C3AED', '#DC2626', '#0891B2', '#65A30D']
+
 let nextHoldingId = 4
 
 export default function PortfolioRisk({
@@ -240,14 +243,60 @@ export default function PortfolioRisk({
     () => holdings.map((holding) => ({
       ...holding,
       value: holding.qty * holding.currentPrice,
+      costValue: holding.qty * holding.avgPrice,
       weight: totalValue > 0 ? (holding.qty * holding.currentPrice) / totalValue * 100 : 0,
     })),
     [holdings, totalValue],
   )
 
+  const totalCost = useMemo(
+    () => holdings.reduce((sum, holding) => sum + holding.qty * holding.avgPrice, 0),
+    [holdings],
+  )
+
+  const totalProfit = totalValue - totalCost
+  const totalReturnPct = totalCost > 0 ? (totalProfit / totalCost) * 100 : 0
+
+  const donutData = useMemo(() => {
+    const items = holdingsWithWeight.filter((holding) => holding.value > 0)
+
+    if (items.length === 0) {
+      return null
+    }
+
+    return {
+      labels: items.map((holding) => holding.name || holding.ticker || '미입력 종목'),
+      datasets: [
+        {
+          data: items.map((holding) => holding.value),
+          backgroundColor: items.map((_, index) => DONUT_COLORS[index % DONUT_COLORS.length]),
+          borderColor: '#FFFFFF',
+          borderWidth: 3,
+          hoverOffset: 4,
+        },
+      ],
+    }
+  }, [holdingsWithWeight])
+
+  const donutOptions = useMemo(() => ({
+    cutout: '68%',
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        callbacks: {
+          label: (context) => {
+            const value = Number(context.raw) || 0
+            const weight = totalValue > 0 ? (value / totalValue) * 100 : 0
+            return `${context.label}: ${fmtKRW(value)} · ${weight.toFixed(1)}%`
+          },
+        },
+      },
+    },
+  }), [totalValue])
+
   const lookupFeedback = useMemo(() => {
     const entries = Object.entries(lookupState)
-      .filter(([, state]) => state?.message && !state?.loading)
+      .filter(([, state]) => state?.message && !state?.loading && state?.tone !== 'success')
       .sort(([, a], [, b]) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
 
     if (entries.length === 0) {
@@ -397,8 +446,8 @@ export default function PortfolioRisk({
 
       setLookupStatus(id, {
         loading: false,
-        message: '종목명과 현재가를 자동입력했습니다.',
-        tone: 'success',
+        message: '',
+        tone: '',
         lastKey: requestKey,
       })
     } catch (error) {
@@ -457,7 +506,6 @@ export default function PortfolioRisk({
 
   const {
     isSupabaseConfigured,
-    userEmail,
     isSaving,
     isRestoring,
     saveError,
@@ -473,71 +521,71 @@ export default function PortfolioRisk({
   return (
     <div className="space-y-6">
       <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div className="space-y-1">
-            <h2 className="text-base font-semibold text-gray-700">클라우드 저장</h2>
-            <p className="text-sm text-gray-500">
-              로그인 계정으로 보유 종목 구성을 저장하고, 다음 로그인 때 자동으로 복원합니다.
-            </p>
-            <p className="text-xs text-gray-400">
-              수익률 입력값은 현재 DB에 저장하지 않으며, 포트폴리오 구성과 분리해서 관리합니다.
-            </p>
-            {userEmail && (
-              <p className="text-xs text-gray-500">
-                저장 계정: <span className="font-semibold text-gray-700">{userEmail}</span>
-              </p>
-            )}
-            {!isSupabaseConfigured && (
-              <p className="text-xs text-amber-600">
-                `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`를 설정하면 저장 기능이 활성화됩니다.
-              </p>
-            )}
-            {lastSavedAt && (
-              <p className="text-xs text-gray-400">마지막 저장: {lastSavedAt}</p>
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(260px,0.9fr)_minmax(0,1.1fr)] lg:items-center">
+          <div className="relative mx-auto flex h-56 w-full max-w-[280px] items-center justify-center">
+            {donutData ? (
+              <>
+                <Doughnut data={donutData} options={donutOptions} />
+                <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
+                  <span className="text-xs font-semibold uppercase tracking-[0.24em] text-gray-400">Portfolio</span>
+                  <span className="mt-2 text-lg font-extrabold text-gray-800">{fmtKRW(totalValue)}</span>
+                  <span className={`mt-1 text-xs font-semibold ${totalReturnPct >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                    {totalReturnPct >= 0 ? '+' : ''}{fmtPct(totalReturnPct)}
+                  </span>
+                </div>
+              </>
+            ) : (
+              <div className="flex h-full w-full items-center justify-center rounded-full border border-dashed border-gray-200 bg-gray-50 text-sm font-semibold text-gray-400">
+                종목을 추가하면 비중이 표시됩니다
+              </div>
             )}
           </div>
 
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={onRestore}
-              disabled={!isSupabaseConfigured || isRestoring || isSaving}
-              className="px-4 py-2 rounded-lg border border-gray-200 text-sm font-semibold text-gray-700 hover:border-midblue hover:text-midblue transition disabled:opacity-50"
-            >
-              {isRestoring ? '불러오는 중...' : '저장본 다시 불러오기'}
-            </button>
-            <button
-              type="button"
-              onClick={onSave}
-              disabled={!isSupabaseConfigured || isSaving || isRestoring}
-              className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-500 transition disabled:opacity-50"
-            >
-              {isSaving ? '저장 중...' : '지금 저장'}
-            </button>
-          </div>
-        </div>
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-base font-semibold text-gray-700">포트폴리오 요약</h2>
+              <p className="mt-1 text-sm text-gray-500">
+                저장된 구성은 유지하고, 현재가는 실시간 조회값으로만 계산합니다.
+              </p>
+              {lastSavedAt && (
+                <p className="mt-1 text-xs text-gray-400">마지막 저장: {lastSavedAt}</p>
+              )}
+            </div>
 
-        <div className="mt-4 space-y-2">
-          {saveError && (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
-              {saveError}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div className="rounded-xl bg-slate-50 px-4 py-3">
+                <p className="text-xs font-semibold text-gray-400">총 평가금액</p>
+                <p className="mt-1 text-lg font-extrabold text-gray-800">{fmtKRW(totalValue)}</p>
+              </div>
+              <div className="rounded-xl bg-slate-50 px-4 py-3">
+                <p className="text-xs font-semibold text-gray-400">총 매입금액</p>
+                <p className="mt-1 text-lg font-extrabold text-gray-800">{fmtKRW(totalCost)}</p>
+              </div>
+              <div className="rounded-xl bg-slate-50 px-4 py-3">
+                <p className="text-xs font-semibold text-gray-400">총 수익률</p>
+                <p className={`mt-1 text-lg font-extrabold ${totalReturnPct >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                  {totalReturnPct >= 0 ? '+' : ''}{fmtPct(totalReturnPct)}
+                </p>
+              </div>
             </div>
-          )}
-          {restoreError && (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
-              {restoreError}
-            </div>
-          )}
-          {notice && !saveError && !restoreError && (
-            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-              {notice}
-            </div>
-          )}
-          {isSupabaseConfigured && hasCheckedRemote && !hasRemoteSnapshot && !notice && (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
-              아직 저장된 포트폴리오가 없습니다. 현재 내용을 다듬은 뒤 저장해 주세요.
-            </div>
-          )}
+
+            {donutData && (
+              <div className="flex flex-wrap gap-2">
+                {holdingsWithWeight
+                  .filter((holding) => holding.value > 0)
+                  .map((holding, index) => (
+                    <div key={holding.id} className="flex items-center gap-2 rounded-full bg-gray-50 px-3 py-1.5 text-xs text-gray-600">
+                      <span
+                        className="h-2.5 w-2.5 rounded-full"
+                        style={{ backgroundColor: DONUT_COLORS[index % DONUT_COLORS.length] }}
+                      />
+                      <span>{holding.name || holding.ticker || '미입력 종목'}</span>
+                      <span className="font-semibold text-gray-800">{holding.weight.toFixed(1)}%</span>
+                    </div>
+                  ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -546,6 +594,22 @@ export default function PortfolioRisk({
           <div className="flex items-center justify-between border-b border-gray-100 pb-3 mb-4">
             <h2 className="text-base font-semibold text-gray-700">포트폴리오 구성</h2>
             <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onRestore}
+                disabled={!isSupabaseConfigured || isRestoring || isSaving}
+                className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-gray-200 text-xs font-semibold text-gray-700 hover:border-midblue hover:text-midblue transition disabled:opacity-50"
+              >
+                {isRestoring ? <Spinner size="xs" label="" /> : '불러오기'}
+              </button>
+              <button
+                type="button"
+                onClick={onSave}
+                disabled={!isSupabaseConfigured || isSaving || isRestoring}
+                className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-500 transition disabled:opacity-50"
+              >
+                {isSaving ? <Spinner size="xs" label="" /> : '저장'}
+              </button>
               {refreshMsg && (
                 <span className={`text-xs ${refreshMsg.includes('실패') ? 'text-red-500' : 'text-emerald-600'}`}>
                   {refreshMsg}
@@ -559,13 +623,35 @@ export default function PortfolioRisk({
               >
                 {refreshing ? <Spinner size="sm" label="" /> : '📡'} 시세 갱신
               </button>
-              <button
-                onClick={addRow}
-                className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-navy text-white text-xs font-semibold hover:bg-midblue transition"
-              >
-                <span className="text-base leading-none">+</span> 종목 추가
-              </button>
             </div>
+          </div>
+
+          <div className="mb-4 space-y-2">
+            {saveError && (
+              <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+                {saveError}
+              </div>
+            )}
+            {restoreError && (
+              <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+                {restoreError}
+              </div>
+            )}
+            {notice && !saveError && !restoreError && (
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                {notice}
+              </div>
+            )}
+            {isSupabaseConfigured && hasCheckedRemote && !hasRemoteSnapshot && !notice && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+                아직 저장된 포트폴리오가 없습니다. 종목 구성을 입력한 뒤 저장해 주세요.
+              </div>
+            )}
+            {!isSupabaseConfigured && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+                Supabase 설정이 없어서 저장과 불러오기를 사용할 수 없습니다.
+              </div>
+            )}
           </div>
 
           <div className="overflow-x-auto">
@@ -685,6 +771,19 @@ export default function PortfolioRisk({
               </tbody>
             </table>
           </div>
+
+          {holdingsWithWeight.length > 0 && (
+            <div className="mt-3">
+              <button
+                type="button"
+                onClick={addRow}
+                className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-midblue/35 bg-accent/45 px-3 py-3 text-sm font-semibold text-midblue/80 transition hover:border-midblue hover:bg-accent hover:text-midblue"
+              >
+                <span className="text-base leading-none">+</span>
+                종목 추가
+              </button>
+            </div>
+          )}
 
           {lookupFeedback && (
             <div className={`mt-3 rounded-lg border px-3 py-2 text-xs ${
