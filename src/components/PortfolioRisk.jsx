@@ -1,8 +1,8 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import UITooltip from './ui/Tooltip'
 import FormattedInput from './ui/FormattedInput'
 import Spinner from './ui/Spinner'
-import { generateSampleReturns, DEFAULT_HOLDINGS } from './portfolioDefaults'
+import { generateSampleReturns } from './portfolioDefaults'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -228,20 +228,40 @@ export default function PortfolioRisk({
 }) {
   const [refreshing, setRefreshing] = useState(false)
   const [refreshMsg, setRefreshMsg] = useState('')
+  const [lookupState, setLookupState] = useState({})
+  const lookupRequestsRef = useRef({})
 
   const totalValue = useMemo(
-    () => holdings.reduce((sum, holding) => sum + holding.qty * holding.price, 0),
+    () => holdings.reduce((sum, holding) => sum + holding.qty * holding.currentPrice, 0),
     [holdings],
   )
 
   const holdingsWithWeight = useMemo(
     () => holdings.map((holding) => ({
       ...holding,
-      value: holding.qty * holding.price,
-      weight: totalValue > 0 ? (holding.qty * holding.price) / totalValue * 100 : 0,
+      value: holding.qty * holding.currentPrice,
+      weight: totalValue > 0 ? (holding.qty * holding.currentPrice) / totalValue * 100 : 0,
     })),
     [holdings, totalValue],
   )
+
+  const lookupFeedback = useMemo(() => {
+    const entries = Object.entries(lookupState)
+      .filter(([, state]) => state?.message && !state?.loading)
+      .sort(([, a], [, b]) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+
+    if (entries.length === 0) {
+      return null
+    }
+
+    const [id, state] = entries[0]
+    const holding = holdings.find((item) => String(item.id) === id)
+    return {
+      message: state.message,
+      tone: state.tone,
+      label: holding?.name?.trim() || holding?.ticker || '현재 행',
+    }
+  }, [holdings, lookupState])
 
   const returnsPct = useMemo(() => returnsText
     .split(/[\s,]+/)
@@ -273,12 +293,135 @@ export default function PortfolioRisk({
   const addRow = () => {
     setHoldings((prev) => [
       ...prev,
-      { id: nextHoldingId++, name: '', ticker: '', qty: 1, price: 0 },
+      { id: nextHoldingId++, name: '', ticker: '', qty: 1, avgPrice: 0, currentPrice: 0 },
     ])
   }
 
   const removeRow = (id) => {
     setHoldings((prev) => prev.filter((holding) => holding.id !== id))
+    setLookupState((prev) => {
+      if (!prev[id]) {
+        return prev
+      }
+
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
+    delete lookupRequestsRef.current[id]
+  }
+
+  const setLookupStatus = (id, patch) => {
+    setLookupState((prev) => ({
+      ...prev,
+      [id]: {
+        loading: false,
+        message: '',
+        tone: '',
+        lastKey: '',
+        updatedAt: 0,
+        ...prev[id],
+        updatedAt: Date.now(),
+        ...patch,
+      },
+    }))
+  }
+
+  const lookupHolding = async (id, field, rawValue) => {
+    const normalized = field === 'ticker'
+      ? rawValue.replace(/\D/g, '')
+      : rawValue.trim()
+
+    if (!normalized) {
+      setLookupStatus(id, { loading: false, message: '', tone: '', lastKey: '' })
+      return
+    }
+
+    if (field === 'ticker' && normalized.length !== 6) {
+      setLookupStatus(id, {
+        loading: false,
+        message: '종목코드는 6자리 숫자로 입력해 주세요.',
+        tone: 'error',
+        lastKey: '',
+      })
+      return
+    }
+
+    const requestKey = `${field}:${normalized.toLowerCase()}`
+    const currentRequest = lookupRequestsRef.current[id]
+    const currentState = lookupState[id]
+
+    if (currentRequest === requestKey || currentState?.lastKey === requestKey) {
+      return
+    }
+
+    lookupRequestsRef.current[id] = requestKey
+    setLookupStatus(id, { loading: true, message: '', tone: '', lastKey: requestKey })
+
+    try {
+      const searchRes = await fetch(`/api/market/search?q=${encodeURIComponent(normalized)}`)
+      const searchData = await searchRes.json()
+
+      if (!searchRes.ok || !searchData.ticker) {
+        throw new Error(searchData.error || '종목을 찾을 수 없습니다.')
+      }
+
+      const stockRes = await fetch(`/api/market/stock?ticker=${encodeURIComponent(searchData.ticker)}`)
+      const stockData = await stockRes.json()
+      const hasStockError = !stockRes.ok || stockData.error
+
+      setHoldings((prev) => prev.map((holding) => {
+        if (holding.id !== id) {
+          return holding
+        }
+
+        return {
+          ...holding,
+          ticker: searchData.ticker,
+          name: stockData.name || searchData.name || holding.name,
+          currentPrice: Number(stockData.price) > 0 ? Number(stockData.price) : holding.currentPrice,
+        }
+      }))
+
+      if (hasStockError) {
+        const fallbackMessage = stockData.error || '종목명은 찾았지만 현재가 조회는 실패했습니다.'
+
+        setLookupStatus(id, {
+          loading: false,
+          message: fallbackMessage,
+          tone: 'warn',
+          lastKey: requestKey,
+        })
+        return
+      }
+
+      setLookupStatus(id, {
+        loading: false,
+        message: '종목명과 현재가를 자동입력했습니다.',
+        tone: 'success',
+        lastKey: requestKey,
+      })
+    } catch (error) {
+      setLookupStatus(id, {
+        loading: false,
+        message: error.message || '종목 검색에 실패했습니다.',
+        tone: 'error',
+        lastKey: '',
+      })
+    } finally {
+      if (lookupRequestsRef.current[id] === requestKey) {
+        delete lookupRequestsRef.current[id]
+      }
+    }
+  }
+
+  const handleLookupKeyDown = (event, holding, field) => {
+    if (event.key !== 'Enter') {
+      return
+    }
+
+    event.preventDefault()
+    lookupHolding(holding.id, field, event.currentTarget.value)
   }
 
   const handleRefreshPrices = async () => {
@@ -295,7 +438,7 @@ export default function PortfolioRisk({
           try {
             const response = await fetch(`/api/market/stock?ticker=${holding.ticker}`)
             const data = await response.json()
-            return data.price ? { ...holding, price: data.price } : holding
+            return data.price ? { ...holding, currentPrice: data.price } : holding
           } catch {
             return holding
           }
@@ -334,7 +477,10 @@ export default function PortfolioRisk({
           <div className="space-y-1">
             <h2 className="text-base font-semibold text-gray-700">클라우드 저장</h2>
             <p className="text-sm text-gray-500">
-              로그인 계정으로 포트폴리오를 저장하고, 다음 로그인 때 자동으로 복원합니다.
+              로그인 계정으로 보유 종목 구성을 저장하고, 다음 로그인 때 자동으로 복원합니다.
+            </p>
+            <p className="text-xs text-gray-400">
+              수익률 입력값은 현재 DB에 저장하지 않으며, 포트폴리오 구성과 분리해서 관리합니다.
             </p>
             {userEmail && (
               <p className="text-xs text-gray-500">
@@ -395,8 +541,8 @@ export default function PortfolioRisk({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white rounded-xl shadow-sm p-6">
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)] gap-6">
+        <div className="min-w-0 bg-white rounded-xl shadow-sm p-6">
           <div className="flex items-center justify-between border-b border-gray-100 pb-3 mb-4">
             <h2 className="text-base font-semibold text-gray-700">포트폴리오 구성</h2>
             <div className="flex items-center gap-2">
@@ -429,6 +575,7 @@ export default function PortfolioRisk({
                   <th className="text-left pb-2 pr-2">종목명</th>
                   <th className="text-left pb-2 px-1 w-20">종목코드</th>
                   <th className="text-right pb-2 px-2">수량</th>
+                  <th className="text-right pb-2 px-2">평단가(원)</th>
                   <th className="text-right pb-2 px-2">현재가(원)</th>
                   <th className="text-right pb-2 px-2">비중(%)</th>
                   <th className="pb-2 w-6" />
@@ -438,23 +585,44 @@ export default function PortfolioRisk({
                 {holdingsWithWeight.length > 0 ? holdingsWithWeight.map((holding) => (
                   <tr key={holding.id}>
                     <td className="py-2 pr-2">
-                      <input
-                        type="text"
-                        className={inputCls}
-                        value={holding.name}
-                        placeholder="종목명"
-                        onChange={(event) => updateHolding(holding.id, 'name', event.target.value)}
-                      />
+                      <div className="space-y-1">
+                        <div className="relative">
+                          <input
+                            type="text"
+                            className={`${inputCls} pr-8`}
+                            value={holding.name}
+                            placeholder="종목명"
+                            onChange={(event) => {
+                              updateHolding(holding.id, 'name', event.target.value)
+                              setLookupStatus(holding.id, { message: '', tone: '', lastKey: '' })
+                            }}
+                            onBlur={(event) => lookupHolding(holding.id, 'name', event.target.value)}
+                            onKeyDown={(event) => handleLookupKeyDown(event, holding, 'name')}
+                          />
+                          {lookupState[holding.id]?.loading && (
+                            <span className="absolute right-2 top-1/2 -translate-y-1/2">
+                              <Spinner size="xs" label="" />
+                            </span>
+                          )}
+                        </div>
+                      </div>
                     </td>
                     <td className="py-2 px-1">
-                      <input
-                        type="text"
-                        className={`${inputCls} text-center`}
-                        value={holding.ticker ?? ''}
-                        placeholder="000000"
-                        maxLength={6}
-                        onChange={(event) => updateHolding(holding.id, 'ticker', event.target.value.replace(/\D/g, ''))}
-                      />
+                      <div className="relative">
+                        <input
+                          type="text"
+                          className={`${inputCls} text-center`}
+                          value={holding.ticker ?? ''}
+                          placeholder="000000"
+                          maxLength={6}
+                          onChange={(event) => {
+                            updateHolding(holding.id, 'ticker', event.target.value.replace(/\D/g, ''))
+                            setLookupStatus(holding.id, { message: '', tone: '', lastKey: '' })
+                          }}
+                          onBlur={(event) => lookupHolding(holding.id, 'ticker', event.target.value)}
+                          onKeyDown={(event) => handleLookupKeyDown(event, holding, 'ticker')}
+                        />
+                      </div>
                     </td>
                     <td className="py-2 px-2">
                       <FormattedInput
@@ -467,9 +635,18 @@ export default function PortfolioRisk({
                     <td className="py-2 px-2">
                       <FormattedInput
                         className={`${inputCls} text-right`}
-                        value={holding.price}
+                        value={holding.avgPrice}
                         min={0}
-                        onChange={(value) => updateHolding(holding.id, 'price', value)}
+                        onChange={(value) => updateHolding(holding.id, 'avgPrice', value)}
+                      />
+                    </td>
+                    <td className="py-2 px-2">
+                      <FormattedInput
+                        className={`${inputCls} text-right bg-gray-50 cursor-default select-none text-gray-500`}
+                        value={holding.currentPrice}
+                        min={0}
+                        onChange={(value) => updateHolding(holding.id, 'currentPrice', value)}
+                        readOnly
                       />
                     </td>
                     <td className="py-2 px-2 text-right font-medium text-gray-600">
@@ -487,7 +664,7 @@ export default function PortfolioRisk({
                   </tr>
                 )) : (
                   <tr>
-                    <td colSpan={6} className="py-10 text-center">
+                    <td colSpan={7} className="py-10 text-center">
                       <div className="space-y-2">
                         <p className="text-3xl">🗂️</p>
                         <p className="text-sm font-semibold text-gray-500">포트폴리오가 비어 있습니다</p>
@@ -509,13 +686,25 @@ export default function PortfolioRisk({
             </table>
           </div>
 
+          {lookupFeedback && (
+            <div className={`mt-3 rounded-lg border px-3 py-2 text-xs ${
+              lookupFeedback.tone === 'error'
+                ? 'border-red-200 bg-red-50 text-red-600'
+                : lookupFeedback.tone === 'warn'
+                  ? 'border-amber-200 bg-amber-50 text-amber-700'
+                  : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+            }`}>
+              {lookupFeedback.label}: {lookupFeedback.message}
+            </div>
+          )}
+
           <div className="mt-4 flex items-center justify-between bg-accent rounded-lg px-4 py-3">
             <span className="text-sm font-semibold text-navy">총 포트폴리오 가치</span>
             <span className="text-lg font-extrabold text-navy">{fmtKRW(totalValue)}</span>
           </div>
         </div>
 
-        <div className="space-y-5">
+        <div className="min-w-0 space-y-5">
           <div className="bg-white rounded-xl shadow-sm p-6">
             <div className="flex items-center justify-between border-b border-gray-100 pb-3 mb-4">
               <div>
