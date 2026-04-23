@@ -64,9 +64,22 @@ src/
 # 의존성 설치
 npm install
 
-# 개발 서버 실행
+# 프론트엔드만 실행 (Vite)
 npm run dev
+
+# API 함수만 실행 (Vercel Functions)
+npm run dev:api
+
+# Windows에서 프론트 + API 함께 실행
+./run-dev-with-api.bat
 
 # 프로덕션 빌드
 npm run build
 ```
+
+## 로컬 API 개발
+
+- `npm run dev`만 실행하면 Vite 프론트엔드만 뜨고 `/api/*` 함수는 동작하지 않습니다.
+- `/api/market/*`를 함께 쓰려면 `Vercel Functions`가 별도로 떠 있어야 합니다.
+- Windows에서는 `run-dev-with-api.bat`를 실행하면 `Vite(5173)`와 `Vercel API(3000)`를 같이 띄웁니다.
+- `vite.config.js`는 개발 중 `/api/*` 요청을 `http://127.0.0.1:3000`으로 프록시합니다.

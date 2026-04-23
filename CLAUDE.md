@@ -5,7 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-npm run dev       # Start Vite dev server (http://localhost:5173)
+npm run dev       # Start Vite dev server only (http://localhost:5173)
+npm run dev:api   # Start Vercel Functions locally (http://localhost:3000)
 npm run build     # Production build
 npm run preview   # Serve production build locally
 npm run lint      # Run ESLint
@@ -53,7 +54,7 @@ Key state in `App.jsx`:
 - **Market data**: Client calls `/api/market/stock?ticker=XXXXXX`. When `KIS_APP_KEY` is not set, returns mock prices for major tickers (개발용).
 - **PDF**: `@react-pdf/renderer` with Nanum Gothic font. `PDFDownloadLink` in TaxReport generates client-side PDF.
 - **DB schema**: See `supabase-schema.sql`. Run in Supabase SQL Editor before first deploy.
-- **Local dev API**: Requires `vercel dev` (not `npm run dev`) for `/api/*` routes to work.
+- **Local dev API**: `npm run dev` alone does not serve `/api/*`. Start `npm run dev:api` as well, or use `run-dev-with-api.bat` on Windows.
 
 ### Environment variables
 
