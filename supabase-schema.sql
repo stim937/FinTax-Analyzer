@@ -36,8 +36,7 @@ create table if not exists calc_history (
 --     "name": "삼성전자",
 --     "ticker": "005930",
 --     "qty": 10,
---     "avgPrice": 72000,
---     "currentPrice": 74500
+--     "avgPrice": 72000
 --   }
 -- ]
 create table if not exists portfolio (
@@ -48,16 +47,15 @@ create table if not exists portfolio (
 );
 
 -- 포트폴리오 수익률/시계열 테이블
--- 필요 시 일별 수익률, 수익률 산출 기준일, 메타데이터를 별도로 관리합니다.
+-- 장 마감 후 포트폴리오 평가금액과 전일 대비 수익률을 저장합니다.
 create table if not exists portfolio_returns (
-  id            uuid primary key default gen_random_uuid(),
-  user_id       uuid not null references auth.users (id) on delete cascade,
-  portfolio_id  uuid,
-  trade_date    date,
-  return_pct    numeric(12, 6),
-  benchmark_pct numeric(12, 6),
-  meta          jsonb not null default '{}'::jsonb,
-  created_at    timestamptz default now()
+  id              uuid primary key default gen_random_uuid(),
+  user_id         uuid not null references auth.users (id) on delete cascade,
+  trade_date      date not null,
+  portfolio_value numeric(18, 2) not null default 0,
+  return_pct      numeric(12, 6),
+  meta            jsonb not null default '{}'::jsonb,
+  created_at      timestamptz default now()
 );
 
 alter table transactions enable row level security;
@@ -115,6 +113,12 @@ create index if not exists idx_calc_history_user_id on calc_history (user_id);
 create index if not exists idx_calc_history_type on calc_history (user_id, type);
 create index if not exists idx_portfolio_returns_user_id on portfolio_returns (user_id);
 create index if not exists idx_portfolio_returns_trade_date on portfolio_returns (user_id, trade_date desc);
+
+alter table portfolio_returns
+  drop constraint if exists portfolio_returns_user_trade_date_unique;
+
+alter table portfolio_returns
+  add constraint portfolio_returns_user_trade_date_unique unique (user_id, trade_date);
 
 alter table calc_history
   drop constraint if exists calc_history_user_type_unique;
