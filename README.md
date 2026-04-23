@@ -76,6 +76,9 @@ npm run dev:api
 # Windows 더블클릭/명령프롬프트용 래퍼
 ./run-dev-with-api.bat
 
+# 변경사항 커밋 + 푸시 + 드래프트 PR 생성
+npm run publish:pr -- "chore: 변경 설명"
+
 # 프로덕션 빌드
 npm run build
 ```
@@ -87,3 +90,10 @@ npm run build
 - `npm run dev:full`이 권장 진입점이며, `.env.local`을 먼저 읽고 `vercel dev`를 띄웁니다.
 - `run-dev-with-api.bat`는 Windows에서 더블클릭이나 `cmd` 실행을 쉽게 하기 위한 얇은 래퍼입니다.
 - 이 방식에서는 앱과 `/api/*`가 모두 `http://127.0.0.1:3000`에서 함께 동작합니다.
+
+## PR 자동화
+
+- `npm run publish:pr -- "커밋 메시지"`를 실행하면 현재 브랜치 기준으로 `git add -A`, 커밋, `git push`, 드래프트 PR 생성까지 한 번에 진행합니다.
+- 기본 대상 브랜치는 `main`입니다.
+- 현재 브랜치에 이미 같은 base 대상 PR이 있으면 새로 만들지 않고 기존 PR URL만 출력합니다.
+- `gh auth login`으로 GitHub CLI 인증이 먼저 되어 있어야 합니다.

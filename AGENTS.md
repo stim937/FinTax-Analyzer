@@ -21,6 +21,7 @@ This file provides Codex-specific operating guidance for this repository.
 npm run dev       # Start Vite dev server only (http://localhost:5173)
 npm run dev:api   # Start Vercel Functions locally (http://localhost:3000)
 npm run dev:full  # Windows integrated flow: load .env.local and start App + API
+npm run publish:pr -- "chore: 변경 설명"  # Stage, commit, push, and open a draft PR
 npm run build     # Production build
 npm run preview   # Serve production build locally
 npm run lint      # Run ESLint
@@ -35,6 +36,7 @@ No test framework is configured, so use `npm run lint` and `npm run build` as th
 - Avoid broad renames or large structural churn unless the task requires it.
 - Do not commit generated logs or local-only artifacts.
 - Treat `run-dev-with-api.bat` as a convenience wrapper, not the main implementation.
+- When the user asks to publish work as a PR after code changes, prefer `npm run publish:pr -- "<commit message>"` over manually repeating git and gh steps.
 
 ## Where to work
 

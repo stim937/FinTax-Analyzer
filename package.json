@@ -8,6 +8,7 @@
     "dev:app": "vite",
     "dev:api": "vercel dev --listen 3000",
     "dev:full": "powershell -ExecutionPolicy Bypass -File ./run-dev-with-api.ps1",
+    "publish:pr": "powershell -ExecutionPolicy Bypass -File ./scripts/publish-pr.ps1",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview"
