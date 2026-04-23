@@ -94,7 +94,7 @@ $body = @"
 "@
 
 $bodyFile = Join-Path $PWD 'tmp-pr-body.md'
-Set-Content -LiteralPath $bodyFile -Value $body -Encoding UTF8
+[System.IO.File]::WriteAllText($bodyFile, $body, [System.Text.UTF8Encoding]::new($false))
 
 try {
   Write-Host "[publish-pr] PR을 생성합니다..." -ForegroundColor Cyan
