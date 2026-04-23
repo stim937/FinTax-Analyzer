@@ -15,7 +15,40 @@ import {
 import AnnotationPlugin from 'chartjs-plugin-annotation'
 import { Bar, Doughnut } from 'react-chartjs-2'
 
-ChartJS.register(ArcElement, CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend, AnnotationPlugin)
+const CenterTextPlugin = {
+  id: 'centerText',
+  afterDatasetsDraw(chart, _args, pluginOptions) {
+    if (!pluginOptions?.change) {
+      return
+    }
+
+    const arc = chart.getDatasetMeta(0)?.data?.[0]
+    if (!arc) {
+      return
+    }
+
+    const { ctx } = chart
+    const { x, y, innerRadius } = arc
+    const titleY = y - innerRadius * 0.12
+    const changeY = y + innerRadius * 0.18
+
+    ctx.save()
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+
+    ctx.fillStyle = pluginOptions.titleColor ?? '#9CA3AF'
+    ctx.font = `600 ${Math.max(11, innerRadius * 0.16)}px sans-serif`
+    ctx.fillText(pluginOptions.title, x, titleY)
+
+    ctx.fillStyle = pluginOptions.changeColor ?? '#059669'
+    ctx.font = `800 ${Math.max(13, innerRadius * 0.24)}px sans-serif`
+    ctx.fillText(pluginOptions.change, x, changeY)
+
+    ctx.restore()
+  },
+}
+
+ChartJS.register(ArcElement, CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend, AnnotationPlugin, CenterTextPlugin)
 
 function calcVaR(returns, portfolioValue) {
   const sorted = [...returns].sort((a, b) => a - b)
@@ -274,6 +307,9 @@ export default function PortfolioRisk({
       ...holding,
       value: holding.qty * holding.currentPrice,
       costValue: holding.qty * holding.avgPrice,
+      returnPct: holding.avgPrice > 0
+        ? ((holding.currentPrice - holding.avgPrice) / holding.avgPrice) * 100
+        : 0,
       weight: totalValue > 0 ? (holding.qty * holding.currentPrice) / totalValue * 100 : 0,
     })),
     [holdings, totalValue],
@@ -312,6 +348,11 @@ export default function PortfolioRisk({
     cutout: '68%',
     plugins: {
       legend: { display: false },
+      centerText: {
+        title: 'PORTFOLIO',
+        change: `${totalReturnPct >= 0 ? '+' : ''}${fmtPct(totalReturnPct)}`,
+        changeColor: totalReturnPct >= 0 ? '#059669' : '#EF4444',
+      },
       tooltip: {
         callbacks: {
           label: (context) => {
@@ -578,23 +619,17 @@ export default function PortfolioRisk({
   } = cloudState ?? {}
 
   const { onSave } = cloudActions ?? {}
+  const hasManyHoldings = holdingsWithWeight.length >= 6
 
   return (
     <div className="space-y-6">
       <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(260px,0.9fr)_minmax(0,1.1fr)] lg:items-center">
-          <div className="relative mx-auto flex h-56 w-full max-w-[280px] items-center justify-center">
+          <div className="relative mx-auto h-56 w-full max-w-[280px]">
             {donutData ? (
-              <>
-                <Doughnut data={donutData} options={donutOptions} />
-                <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
-                  <span className="text-xs font-semibold uppercase tracking-[0.24em] text-gray-400">Portfolio</span>
-                  <span className="mt-2 text-lg font-extrabold text-gray-800">{fmtKRW(totalValue)}</span>
-                  <span className={`mt-1 text-xs font-semibold ${totalReturnPct >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                    {totalReturnPct >= 0 ? '+' : ''}{fmtPct(totalReturnPct)}
-                  </span>
-                </div>
-              </>
+              <div className="absolute inset-0">
+                <Doughnut data={donutData} options={donutOptions} plugins={[CenterTextPlugin]} />
+              </div>
             ) : (
               <div className="flex h-full w-full items-center justify-center rounded-full border border-dashed border-gray-200 bg-gray-50 text-sm font-semibold text-gray-400">
                 종목을 추가하면 비중이 표시됩니다
@@ -655,6 +690,13 @@ export default function PortfolioRisk({
           <div className="flex items-center justify-between border-b border-gray-100 pb-3 mb-4">
             <h2 className="text-base font-semibold text-gray-700">포트폴리오 구성</h2>
             <div className="flex items-center gap-2">
+              <div className="min-w-[96px] text-right">
+                {refreshMsg && (
+                  <span className={`text-xs whitespace-nowrap ${refreshMsg.includes('실패') ? 'text-red-500' : 'text-emerald-600'}`}>
+                    {refreshMsg}
+                  </span>
+                )}
+              </div>
               <button
                 type="button"
                 onClick={onSave}
@@ -663,11 +705,6 @@ export default function PortfolioRisk({
               >
                 {isSaving ? <Spinner size="xs" label="" /> : '저장'}
               </button>
-              {refreshMsg && (
-                <span className={`text-xs ${refreshMsg.includes('실패') ? 'text-red-500' : 'text-emerald-600'}`}>
-                  {refreshMsg}
-                </span>
-              )}
               <button
                 onClick={handleRefreshPrices}
                 disabled={refreshing}
@@ -708,121 +745,129 @@ export default function PortfolioRisk({
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <div className={hasManyHoldings ? 'max-h-[332px] overflow-y-auto pr-1' : ''}>
+              <table className="w-full text-sm">
               <thead>
                 <tr className="text-xs font-semibold text-gray-400 uppercase tracking-wide">
                   <th className="text-left pb-2 pr-2">종목명</th>
                   <th className="text-left pb-2 px-1 w-20">종목코드</th>
-                  <th className="text-right pb-2 px-2">수량</th>
+                  <th className="text-right pb-2 px-2 w-24">수량</th>
                   <th className="text-right pb-2 px-2">평단가(원)</th>
                   <th className="text-right pb-2 px-2">현재가(원)</th>
+                  <th className="text-right pb-2 px-2">수익률(%)</th>
                   <th className="text-right pb-2 px-2">비중(%)</th>
                   <th className="pb-2 w-6" />
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-50">
-                {holdingsWithWeight.length > 0 ? holdingsWithWeight.map((holding) => (
-                  <tr key={holding.id}>
-                    <td className="py-2 pr-2">
-                      <div className="space-y-1">
+                <tbody className="divide-y divide-gray-50">
+                  {holdingsWithWeight.length > 0 ? holdingsWithWeight.map((holding) => (
+                    <tr key={holding.id}>
+                      <td className="py-2 pr-2">
+                        <div className="space-y-1">
+                          <div className="relative">
+                            <input
+                              type="text"
+                              className={`${inputCls} pr-8`}
+                              value={holding.name}
+                              placeholder="종목명"
+                              onChange={(event) => {
+                                updateHolding(holding.id, 'name', event.target.value)
+                                setLookupStatus(holding.id, { message: '', tone: '', lastKey: '' })
+                              }}
+                              onBlur={(event) => lookupHolding(holding.id, 'name', event.target.value)}
+                              onKeyDown={(event) => handleLookupKeyDown(event, holding, 'name')}
+                            />
+                            {lookupState[holding.id]?.loading && (
+                              <span className="absolute right-2 top-1/2 -translate-y-1/2">
+                                <Spinner size="xs" label="" />
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="py-2 px-1">
                         <div className="relative">
                           <input
                             type="text"
-                            className={`${inputCls} pr-8`}
-                            value={holding.name}
-                            placeholder="종목명"
+                            className={`${inputCls} text-center`}
+                            value={holding.ticker ?? ''}
+                            placeholder="000000"
+                            maxLength={6}
                             onChange={(event) => {
-                              updateHolding(holding.id, 'name', event.target.value)
+                              updateHolding(holding.id, 'ticker', event.target.value.replace(/\D/g, ''))
                               setLookupStatus(holding.id, { message: '', tone: '', lastKey: '' })
                             }}
-                            onBlur={(event) => lookupHolding(holding.id, 'name', event.target.value)}
-                            onKeyDown={(event) => handleLookupKeyDown(event, holding, 'name')}
+                            onBlur={(event) => lookupHolding(holding.id, 'ticker', event.target.value)}
+                            onKeyDown={(event) => handleLookupKeyDown(event, holding, 'ticker')}
                           />
-                          {lookupState[holding.id]?.loading && (
-                            <span className="absolute right-2 top-1/2 -translate-y-1/2">
-                              <Spinner size="xs" label="" />
-                            </span>
-                          )}
                         </div>
-                      </div>
-                    </td>
-                    <td className="py-2 px-1">
-                      <div className="relative">
-                        <input
-                          type="text"
-                          className={`${inputCls} text-center`}
-                          value={holding.ticker ?? ''}
-                          placeholder="000000"
-                          maxLength={6}
-                          onChange={(event) => {
-                            updateHolding(holding.id, 'ticker', event.target.value.replace(/\D/g, ''))
-                            setLookupStatus(holding.id, { message: '', tone: '', lastKey: '' })
-                          }}
-                          onBlur={(event) => lookupHolding(holding.id, 'ticker', event.target.value)}
-                          onKeyDown={(event) => handleLookupKeyDown(event, holding, 'ticker')}
+                      </td>
+                      <td className="py-2 px-2 w-24">
+                        <FormattedInput
+                          className={`${inputCls} text-right`}
+                          value={holding.qty}
+                          min={0}
+                          onChange={(value) => updateHolding(holding.id, 'qty', value)}
                         />
-                      </div>
-                    </td>
-                    <td className="py-2 px-2">
-                      <FormattedInput
-                        className={`${inputCls} text-right`}
-                        value={holding.qty}
-                        min={0}
-                        onChange={(value) => updateHolding(holding.id, 'qty', value)}
-                      />
-                    </td>
-                    <td className="py-2 px-2">
-                      <FormattedInput
-                        className={`${inputCls} text-right`}
-                        value={holding.avgPrice}
-                        min={0}
-                        onChange={(value) => updateHolding(holding.id, 'avgPrice', value)}
-                      />
-                    </td>
-                    <td className="py-2 px-2">
-                      <FormattedInput
-                        className={`${inputCls} text-right bg-gray-50 cursor-default select-none text-gray-500`}
-                        value={holding.currentPrice}
-                        min={0}
-                        onChange={(value) => updateHolding(holding.id, 'currentPrice', value)}
-                        readOnly
-                      />
-                    </td>
-                    <td className="py-2 px-2 text-right font-medium text-gray-600">
-                      {holding.weight.toFixed(1)}%
-                    </td>
-                    <td className="py-2 pl-1">
-                      <button
-                        onClick={() => removeRow(holding.id)}
-                        className="text-gray-300 hover:text-red-400 transition text-base leading-none"
-                        aria-label="삭제"
-                      >
-                        ✕
-                      </button>
-                    </td>
-                  </tr>
-                )) : (
-                  <tr>
-                    <td colSpan={7} className="py-10 text-center">
-                      <div className="space-y-2">
-                        <p className="text-3xl">🗂️</p>
-                        <p className="text-sm font-semibold text-gray-500">포트폴리오가 비어 있습니다</p>
-                        <p className="text-xs text-gray-400">
-                          저장본이 없거나 모두 삭제된 상태입니다. 종목을 추가해 다시 시작하세요.
-                        </p>
+                      </td>
+                      <td className="py-2 px-2">
+                        <FormattedInput
+                          className={`${inputCls} text-right`}
+                          value={holding.avgPrice}
+                          min={0}
+                          onChange={(value) => updateHolding(holding.id, 'avgPrice', value)}
+                        />
+                      </td>
+                      <td className="py-2 px-2">
+                        <FormattedInput
+                          className={`${inputCls} text-right bg-gray-50 cursor-default select-none text-gray-500`}
+                          value={holding.currentPrice}
+                          min={0}
+                          onChange={(value) => updateHolding(holding.id, 'currentPrice', value)}
+                          readOnly
+                        />
+                      </td>
+                      <td className={`py-2 px-2 text-right font-semibold ${holding.returnPct >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                        {holding.avgPrice > 0
+                          ? `${holding.returnPct >= 0 ? '+' : ''}${fmtPct(holding.returnPct)}`
+                          : '-'}
+                      </td>
+                      <td className="py-2 px-2 text-right font-medium text-gray-600">
+                        {holding.weight.toFixed(1)}%
+                      </td>
+                      <td className="py-2 pl-1">
                         <button
-                          type="button"
-                          onClick={addRow}
-                          className="mt-2 px-3 py-1.5 rounded-lg border border-midblue text-midblue text-xs font-semibold hover:bg-accent transition"
+                          onClick={() => removeRow(holding.id)}
+                          className="text-gray-300 hover:text-red-400 transition text-base leading-none"
+                          aria-label="삭제"
                         >
-                          첫 종목 추가
+                          ✕
                         </button>
-                      </div>
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+                      </td>
+                    </tr>
+                  )) : (
+                    <tr>
+                      <td colSpan={8} className="py-10 text-center">
+                        <div className="space-y-2">
+                          <p className="text-3xl">🗂️</p>
+                          <p className="text-sm font-semibold text-gray-500">포트폴리오가 비어 있습니다</p>
+                          <p className="text-xs text-gray-400">
+                            저장본이 없거나 모두 삭제된 상태입니다. 종목을 추가해 다시 시작하세요.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={addRow}
+                            className="mt-2 px-3 py-1.5 rounded-lg border border-gray-300 bg-gray-50 text-gray-500 text-xs font-semibold hover:border-gray-400 hover:bg-gray-100 hover:text-gray-600 transition"
+                          >
+                            첫 종목 추가
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
 
           {holdingsWithWeight.length > 0 && (
@@ -830,7 +875,7 @@ export default function PortfolioRisk({
               <button
                 type="button"
                 onClick={addRow}
-                className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-midblue/35 bg-accent/45 px-3 py-3 text-sm font-semibold text-midblue/80 transition hover:border-midblue hover:bg-accent hover:text-midblue"
+                className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-gray-300 bg-gray-50 px-3 py-3 text-sm font-semibold text-gray-500 transition hover:border-gray-400 hover:bg-gray-100 hover:text-gray-600"
               >
                 <span className="text-base leading-none">+</span>
                 종목 추가
