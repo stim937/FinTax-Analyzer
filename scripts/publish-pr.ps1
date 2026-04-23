@@ -50,10 +50,19 @@ if ($status) {
     throw 'git add 실행에 실패했습니다.'
   }
 
+  git diff --cached --quiet
+  if ($LASTEXITCODE -gt 1) {
+    throw '스테이징된 변경사항 확인에 실패했습니다.'
+  }
+
+  if ($LASTEXITCODE -eq 0) {
+    Write-Host '[publish-pr] 스테이징된 변경사항이 없습니다. 커밋을 건너뜁니다.' -ForegroundColor Yellow
+  } else {
   Write-Host "[publish-pr] 커밋을 생성합니다..." -ForegroundColor Cyan
-  git commit -m $CommitMessage
-  if ($LASTEXITCODE -ne 0) {
-    throw 'git commit 실행에 실패했습니다.'
+    git commit -m $CommitMessage
+    if ($LASTEXITCODE -ne 0) {
+      throw 'git commit 실행에 실패했습니다.'
+    }
   }
 } else {
   Write-Host '[publish-pr] 작업 트리가 깨끗합니다. 새 커밋 없이 진행합니다.' -ForegroundColor Yellow
