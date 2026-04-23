@@ -545,7 +545,7 @@ export default function PortfolioRisk({
         try {
           const response = await fetch(`/api/market/stock?ticker=${holding.ticker}`)
           const data = await response.json()
-          updated.push(data.price ? { ...holding, currentPrice: data.price } : holding)
+          updated.push(Number(data?.price) > 0 ? { ...holding, currentPrice: Number(data.price) } : holding)
         } catch {
           updated.push(holding)
         }
