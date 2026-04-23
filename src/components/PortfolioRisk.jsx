@@ -1,7 +1,8 @@
 import { useState, useMemo, useEffect } from 'react'
-import UITooltip      from './ui/Tooltip'
+import UITooltip from './ui/Tooltip'
 import FormattedInput from './ui/FormattedInput'
-import Spinner        from './ui/Spinner'
+import Spinner from './ui/Spinner'
+import { generateSampleReturns, DEFAULT_HOLDINGS } from './portfolioDefaults'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -16,76 +17,67 @@ import { Bar } from 'react-chartjs-2'
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend, AnnotationPlugin)
 
-// ── 수익률 생성 (Box-Muller 정규분포) ──────────────────────
-function randNormal(mean, std) {
-  let u, v
-  do { u = Math.random() } while (u === 0)
-  do { v = Math.random() } while (v === 0)
-  return mean + Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v) * std
-}
-
-function generateSampleReturns() {
-  return Array.from({ length: 250 }, () => +randNormal(0.03, 1.2).toFixed(4)).join(', ')
-}
-
-// ── 계산 로직 ──────────────────────────────────────────────
-// returns: percent 단위 (예: 1.2, -0.8)
 function calcVaR(returns, portfolioValue) {
   const sorted = [...returns].sort((a, b) => a - b)
   const var95 = Math.abs(sorted[Math.floor(sorted.length * 0.05)])
   const var99 = Math.abs(sorted[Math.floor(sorted.length * 0.01)])
   return {
-    var95:    (var95 / 100) * portfolioValue,
-    var99:    (var99 / 100) * portfolioValue,
+    var95: (var95 / 100) * portfolioValue,
+    var99: (var99 / 100) * portfolioValue,
     var95pct: var95,
     var99pct: var99,
-    raw95:   -var95,   // 실제 5th-percentile 위치 (음수)
-    raw99:   -var99,
+    raw95: -var95,
+    raw99: -var99,
   }
 }
 
-const BIN_WIDTH = 0.5  // percent
+const BIN_WIDTH = 0.5
 
 function buildHistogram(returnsPct) {
-  if (!returnsPct.length) return null
-  const minR  = Math.min(...returnsPct)
-  const maxR  = Math.max(...returnsPct)
+  if (!returnsPct.length) {
+    return null
+  }
+
+  const minR = Math.min(...returnsPct)
+  const maxR = Math.max(...returnsPct)
   const start = Math.floor(minR / BIN_WIDTH) * BIN_WIDTH
-  const end   = Math.ceil(maxR  / BIN_WIDTH) * BIN_WIDTH
+  const end = Math.ceil(maxR / BIN_WIDTH) * BIN_WIDTH
 
   const bins = []
-  for (let b = start; b <= end + BIN_WIDTH * 0.01; b = +(b + BIN_WIDTH).toFixed(8)) {
-    bins.push(+b.toFixed(8))
+  for (let bin = start; bin <= end + BIN_WIDTH * 0.01; bin = +(bin + BIN_WIDTH).toFixed(8)) {
+    bins.push(+bin.toFixed(8))
   }
 
   const counts = new Array(bins.length).fill(0)
-  for (const r of returnsPct) {
-    const idx = Math.floor((r - start) / BIN_WIDTH)
-    if (idx >= 0 && idx < counts.length) counts[idx]++
+  for (const value of returnsPct) {
+    const index = Math.floor((value - start) / BIN_WIDTH)
+    if (index >= 0 && index < counts.length) {
+      counts[index] += 1
+    }
   }
 
-  const labels = bins.map((b) => `${b >= 0 ? '+' : ''}${b.toFixed(1)}`)
+  const labels = bins.map((bin) => `${bin >= 0 ? '+' : ''}${bin.toFixed(1)}`)
+  const getIdx = (pct) => Math.max(-0.5, Math.min(bins.length - 0.5, (pct - start) / BIN_WIDTH))
 
-  // 연속값 → 빈 인덱스 위치 (소수점 허용)
-  const getIdx = (pct) =>
-    Math.max(-0.5, Math.min(bins.length - 0.5, (pct - start) / BIN_WIDTH))
-
-  return { labels, counts, bins, start, getIdx }
+  return { labels, counts, getIdx }
 }
 
-// ── 포맷 헬퍼 ─────────────────────────────────────────────
-const fmtKRW = (n) => `₩ ${Math.round(Math.abs(n)).toLocaleString('ko-KR')}`
-const fmtPct = (n) =>
-  n.toLocaleString('ko-KR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '%'
+const fmtKRW = (value) => `₩ ${Math.round(Math.abs(value)).toLocaleString('ko-KR')}`
+const fmtPct = (value) => (
+  value.toLocaleString('ko-KR', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }) + '%'
+)
 
-// ── 입력 스타일 ───────────────────────────────────────────
 const inputCls =
   'border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-midblue focus:border-transparent transition w-full'
 
-// ── 히스토그램 컴포넌트 ───────────────────────────────────
 function ReturnHistogram({ returnsPct, var95pct, var99pct }) {
   const hist = useMemo(() => buildHistogram(returnsPct), [returnsPct])
-  if (!hist) return null
+  if (!hist) {
+    return null
+  }
 
   const { labels, counts, getIdx } = hist
 
@@ -95,16 +87,24 @@ function ReturnHistogram({ returnsPct, var95pct, var99pct }) {
       {
         label: '빈도',
         data: counts,
-        backgroundColor: labels.map((l) => {
-          const v = parseFloat(l)
-          if (v <= -var99pct) return 'rgba(239,68,68,0.75)'
-          if (v <= -var95pct) return 'rgba(249,115,22,0.6)'
+        backgroundColor: labels.map((label) => {
+          const value = parseFloat(label)
+          if (value <= -var99pct) {
+            return 'rgba(239,68,68,0.75)'
+          }
+          if (value <= -var95pct) {
+            return 'rgba(249,115,22,0.6)'
+          }
           return 'rgba(46,95,172,0.45)'
         }),
-        borderColor: labels.map((l) => {
-          const v = parseFloat(l)
-          if (v <= -var99pct) return 'rgba(239,68,68,1)'
-          if (v <= -var95pct) return 'rgba(249,115,22,1)'
+        borderColor: labels.map((label) => {
+          const value = parseFloat(label)
+          if (value <= -var99pct) {
+            return 'rgba(239,68,68,1)'
+          }
+          if (value <= -var95pct) {
+            return 'rgba(249,115,22,1)'
+          }
           return 'rgba(46,95,172,0.7)'
         }),
         borderWidth: 1,
@@ -128,7 +128,7 @@ function ReturnHistogram({ returnsPct, var95pct, var99pct }) {
       tooltip: {
         callbacks: {
           title: ([item]) => `수익률 구간: ${item.label}%`,
-          label: (item)   => ` 빈도: ${item.raw}일`,
+          label: (item) => ` 빈도: ${item.raw}일`,
         },
       },
       annotation: {
@@ -181,8 +181,8 @@ function ReturnHistogram({ returnsPct, var95pct, var99pct }) {
           color: '#9CA3AF',
           font: { size: 11 },
           maxTicksLimit: 12,
-          callback: (_, i) => {
-            const label = hist.labels[i]
+          callback: (_, index) => {
+            const label = hist.labels[index]
             return label ? `${label}%` : ''
           },
         },
@@ -215,40 +215,96 @@ function ReturnHistogram({ returnsPct, var95pct, var99pct }) {
   )
 }
 
-// ── 메인 컴포넌트 ──────────────────────────────────────────
-let _nextId = 4
+let nextHoldingId = 4
 
-export { generateSampleReturns }
-
-export const DEFAULT_HOLDINGS = [
-  { id: 1, name: '삼성전자',  ticker: '005930', qty: 10, price: 74000  },
-  { id: 2, name: 'SK하이닉스', ticker: '000660', qty: 5,  price: 180000 },
-  { id: 3, name: 'NAVER',     ticker: '035420', qty: 3,  price: 210000 },
-]
-
-export default function PortfolioRisk({ onUpdate, holdings, setHoldings, returnsText, setReturnsText }) {
+export default function PortfolioRisk({
+  onUpdate,
+  holdings,
+  setHoldings,
+  returnsText,
+  setReturnsText,
+  cloudState,
+  cloudActions,
+}) {
   const [refreshing, setRefreshing] = useState(false)
   const [refreshMsg, setRefreshMsg] = useState('')
+
+  const totalValue = useMemo(
+    () => holdings.reduce((sum, holding) => sum + holding.qty * holding.price, 0),
+    [holdings],
+  )
+
+  const holdingsWithWeight = useMemo(
+    () => holdings.map((holding) => ({
+      ...holding,
+      value: holding.qty * holding.price,
+      weight: totalValue > 0 ? (holding.qty * holding.price) / totalValue * 100 : 0,
+    })),
+    [holdings, totalValue],
+  )
+
+  const returnsPct = useMemo(() => returnsText
+    .split(/[\s,]+/)
+    .map(Number)
+    .filter((value) => !Number.isNaN(value) && Number.isFinite(value)), [returnsText])
+
+  const varResult = useMemo(() => {
+    if (returnsPct.length < 20 || totalValue <= 0) {
+      return null
+    }
+    return calcVaR(returnsPct, totalValue)
+  }, [returnsPct, totalValue])
+
+  useEffect(() => {
+    onUpdate?.({ totalValue, var95pct: varResult?.var95pct ?? 0 })
+  }, [onUpdate, totalValue, varResult])
+
+  useEffect(() => {
+    const maxId = holdings.reduce((currentMax, holding) => Math.max(currentMax, Number(holding.id) || 0), 0)
+    nextHoldingId = Math.max(nextHoldingId, maxId + 1)
+  }, [holdings])
+
+  const updateHolding = (id, field, value) => {
+    setHoldings((prev) => prev.map((holding) => (
+      holding.id === id ? { ...holding, [field]: value } : holding
+    )))
+  }
+
+  const addRow = () => {
+    setHoldings((prev) => [
+      ...prev,
+      { id: nextHoldingId++, name: '', ticker: '', qty: 1, price: 0 },
+    ])
+  }
+
+  const removeRow = (id) => {
+    setHoldings((prev) => prev.filter((holding) => holding.id !== id))
+  }
 
   const handleRefreshPrices = async () => {
     setRefreshing(true)
     setRefreshMsg('')
+
     try {
       const updated = await Promise.all(
-        holdings.map(async (h) => {
-          if (!h.ticker) return h
+        holdings.map(async (holding) => {
+          if (!holding.ticker) {
+            return holding
+          }
+
           try {
-            const res  = await fetch(`/api/market/stock?ticker=${h.ticker}`)
-            const data = await res.json()
-            return data.price ? { ...h, price: data.price } : h
-          } catch (_) {
-            return h
+            const response = await fetch(`/api/market/stock?ticker=${holding.ticker}`)
+            const data = await response.json()
+            return data.price ? { ...holding, price: data.price } : holding
+          } catch {
+            return holding
           }
         }),
       )
+
       setHoldings(updated)
       setRefreshMsg('시세 업데이트 완료')
-    } catch (_) {
+    } catch {
       setRefreshMsg('업데이트 실패')
     } finally {
       setRefreshing(false)
@@ -256,61 +312,90 @@ export default function PortfolioRisk({ onUpdate, holdings, setHoldings, returns
     }
   }
 
-  // ── 포트폴리오 계산 ────────────────────────────────────
-  const totalValue = useMemo(
-    () => holdings.reduce((s, h) => s + h.qty * h.price, 0),
-    [holdings],
-  )
+  const {
+    isSupabaseConfigured,
+    userEmail,
+    isSaving,
+    isRestoring,
+    saveError,
+    restoreError,
+    notice,
+    lastSavedAt,
+    hasRemoteSnapshot,
+    hasCheckedRemote,
+  } = cloudState ?? {}
 
-  const holdingsWithWeight = useMemo(
-    () =>
-      holdings.map((h) => ({
-        ...h,
-        value:  h.qty * h.price,
-        weight: totalValue > 0 ? (h.qty * h.price) / totalValue * 100 : 0,
-      })),
-    [holdings, totalValue],
-  )
-
-  // ── 수익률 파싱 ────────────────────────────────────────
-  const returnsPct = useMemo(() => {
-    return returnsText
-      .split(/[\s,]+/)
-      .map(Number)
-      .filter((n) => !isNaN(n) && isFinite(n))
-  }, [returnsText])
-
-  const varResult = useMemo(() => {
-    if (returnsPct.length < 20 || totalValue <= 0) return null
-    return calcVaR(returnsPct, totalValue)
-  }, [returnsPct, totalValue])
-
-  // ── 상위 컴포넌트 갱신 ────────────────────────────────
-  useEffect(() => {
-    onUpdate?.({ totalValue, var95pct: varResult?.var95pct ?? 0 })
-  }, [totalValue, varResult]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ── 종목 행 편집 ───────────────────────────────────────
-  const updateHolding = (id, field, value) =>
-    setHoldings((prev) =>
-      prev.map((h) => (h.id === id ? { ...h, [field]: value } : h)),
-    )
-
-  const addRow = () => {
-    setHoldings((prev) => [
-      ...prev,
-      { id: _nextId++, name: '', ticker: '', qty: 1, price: 0 },
-    ])
-  }
-
-  const removeRow = (id) =>
-    setHoldings((prev) => prev.filter((h) => h.id !== id))
+  const { onSave, onRestore } = cloudActions ?? {}
 
   return (
     <div className="space-y-6">
-      {/* 상단 2열 */}
+      <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-1">
+            <h2 className="text-base font-semibold text-gray-700">클라우드 저장</h2>
+            <p className="text-sm text-gray-500">
+              로그인 계정으로 포트폴리오를 저장하고, 다음 로그인 때 자동으로 복원합니다.
+            </p>
+            {userEmail && (
+              <p className="text-xs text-gray-500">
+                저장 계정: <span className="font-semibold text-gray-700">{userEmail}</span>
+              </p>
+            )}
+            {!isSupabaseConfigured && (
+              <p className="text-xs text-amber-600">
+                `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`를 설정하면 저장 기능이 활성화됩니다.
+              </p>
+            )}
+            {lastSavedAt && (
+              <p className="text-xs text-gray-400">마지막 저장: {lastSavedAt}</p>
+            )}
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={onRestore}
+              disabled={!isSupabaseConfigured || isRestoring || isSaving}
+              className="px-4 py-2 rounded-lg border border-gray-200 text-sm font-semibold text-gray-700 hover:border-midblue hover:text-midblue transition disabled:opacity-50"
+            >
+              {isRestoring ? '불러오는 중...' : '저장본 다시 불러오기'}
+            </button>
+            <button
+              type="button"
+              onClick={onSave}
+              disabled={!isSupabaseConfigured || isSaving || isRestoring}
+              className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-500 transition disabled:opacity-50"
+            >
+              {isSaving ? '저장 중...' : '지금 저장'}
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-4 space-y-2">
+          {saveError && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+              {saveError}
+            </div>
+          )}
+          {restoreError && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+              {restoreError}
+            </div>
+          )}
+          {notice && !saveError && !restoreError && (
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+              {notice}
+            </div>
+          )}
+          {isSupabaseConfigured && hasCheckedRemote && !hasRemoteSnapshot && !notice && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+              아직 저장된 포트폴리오가 없습니다. 현재 내용을 다듬은 뒤 저장해 주세요.
+            </div>
+          )}
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* ── 포트폴리오 구성 ── */}
         <div className="bg-white rounded-xl shadow-sm p-6">
           <div className="flex items-center justify-between border-b border-gray-100 pb-3 mb-4">
             <h2 className="text-base font-semibold text-gray-700">포트폴리오 구성</h2>
@@ -350,47 +435,49 @@ export default function PortfolioRisk({ onUpdate, holdings, setHoldings, returns
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {holdingsWithWeight.map((h) => (
-                  <tr key={h.id}>
+                {holdingsWithWeight.length > 0 ? holdingsWithWeight.map((holding) => (
+                  <tr key={holding.id}>
                     <td className="py-2 pr-2">
                       <input
                         type="text"
                         className={inputCls}
-                        value={h.name}
+                        value={holding.name}
                         placeholder="종목명"
-                        onChange={(e) => updateHolding(h.id, 'name', e.target.value)}
+                        onChange={(event) => updateHolding(holding.id, 'name', event.target.value)}
                       />
                     </td>
                     <td className="py-2 px-1">
                       <input
                         type="text"
                         className={`${inputCls} text-center`}
-                        value={h.ticker ?? ''}
+                        value={holding.ticker ?? ''}
                         placeholder="000000"
                         maxLength={6}
-                        onChange={(e) => updateHolding(h.id, 'ticker', e.target.value.replace(/\D/g, ''))}
+                        onChange={(event) => updateHolding(holding.id, 'ticker', event.target.value.replace(/\D/g, ''))}
                       />
                     </td>
                     <td className="py-2 px-2">
                       <FormattedInput
                         className={`${inputCls} text-right`}
-                        value={h.qty} min={0}
-                        onChange={(v) => updateHolding(h.id, 'qty', v)}
+                        value={holding.qty}
+                        min={0}
+                        onChange={(value) => updateHolding(holding.id, 'qty', value)}
                       />
                     </td>
                     <td className="py-2 px-2">
                       <FormattedInput
                         className={`${inputCls} text-right`}
-                        value={h.price} min={0}
-                        onChange={(v) => updateHolding(h.id, 'price', v)}
+                        value={holding.price}
+                        min={0}
+                        onChange={(value) => updateHolding(holding.id, 'price', value)}
                       />
                     </td>
                     <td className="py-2 px-2 text-right font-medium text-gray-600">
-                      {h.weight.toFixed(1)}%
+                      {holding.weight.toFixed(1)}%
                     </td>
                     <td className="py-2 pl-1">
                       <button
-                        onClick={() => removeRow(h.id)}
+                        onClick={() => removeRow(holding.id)}
                         className="text-gray-300 hover:text-red-400 transition text-base leading-none"
                         aria-label="삭제"
                       >
@@ -398,21 +485,37 @@ export default function PortfolioRisk({ onUpdate, holdings, setHoldings, returns
                       </button>
                     </td>
                   </tr>
-                ))}
+                )) : (
+                  <tr>
+                    <td colSpan={6} className="py-10 text-center">
+                      <div className="space-y-2">
+                        <p className="text-3xl">🗂️</p>
+                        <p className="text-sm font-semibold text-gray-500">포트폴리오가 비어 있습니다</p>
+                        <p className="text-xs text-gray-400">
+                          저장본이 없거나 모두 삭제된 상태입니다. 종목을 추가해 다시 시작하세요.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={addRow}
+                          className="mt-2 px-3 py-1.5 rounded-lg border border-midblue text-midblue text-xs font-semibold hover:bg-accent transition"
+                        >
+                          첫 종목 추가
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
 
-          {/* 총 자산 */}
           <div className="mt-4 flex items-center justify-between bg-accent rounded-lg px-4 py-3">
             <span className="text-sm font-semibold text-navy">총 포트폴리오 가치</span>
             <span className="text-lg font-extrabold text-navy">{fmtKRW(totalValue)}</span>
           </div>
         </div>
 
-        {/* ── 수익률 입력 + 결과 ── */}
         <div className="space-y-5">
-          {/* 수익률 입력 */}
           <div className="bg-white rounded-xl shadow-sm p-6">
             <div className="flex items-center justify-between border-b border-gray-100 pb-3 mb-4">
               <div>
@@ -430,7 +533,7 @@ export default function PortfolioRisk({ onUpdate, holdings, setHoldings, returns
               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-midblue resize-none"
               rows={5}
               value={returnsText}
-              onChange={(e) => setReturnsText(e.target.value)}
+              onChange={(event) => setReturnsText(event.target.value)}
               placeholder="일별 수익률을 쉼표로 구분하여 입력하세요"
             />
             <p className="text-xs text-gray-400 mt-1.5">
@@ -441,11 +544,9 @@ export default function PortfolioRisk({ onUpdate, holdings, setHoldings, returns
             </p>
           </div>
 
-          {/* VaR 결과 카드 */}
           {varResult ? (
             <div className="space-y-3">
               <div className="grid grid-cols-2 gap-3">
-                {/* 95% VaR */}
                 <div className="bg-white rounded-xl shadow-sm p-4 border-t-4 border-orange-400">
                   <span className="text-xs font-semibold text-orange-500 mb-2 block">
                     <UITooltip text="95% VaR — 정상 시장 환경에서 하루 손실이 이 금액을 초과할 확률이 5%임을 의미합니다.">
@@ -455,7 +556,6 @@ export default function PortfolioRisk({ onUpdate, holdings, setHoldings, returns
                   <p className="text-xl font-extrabold text-gray-800">{fmtKRW(varResult.var95)}</p>
                   <p className="text-sm text-gray-500 mt-0.5">{fmtPct(varResult.var95pct)}</p>
                 </div>
-                {/* 99% VaR */}
                 <div className="bg-white rounded-xl shadow-sm p-4 border-t-4 border-red-500">
                   <span className="text-xs font-semibold text-red-500 mb-2 block">
                     <UITooltip text="99% VaR — 손실이 이 금액을 초과할 확률이 1%로, 95% VaR보다 극단적 리스크 시나리오를 나타냅니다.">
@@ -466,7 +566,6 @@ export default function PortfolioRisk({ onUpdate, holdings, setHoldings, returns
                   <p className="text-sm text-gray-500 mt-0.5">{fmtPct(varResult.var99pct)}</p>
                 </div>
               </div>
-              {/* 해석 문구 */}
               <div className="bg-gray-50 rounded-xl p-4 space-y-2 text-sm text-gray-600">
                 <p>
                   📊 하루 최대 손실이 <strong>95% 확률</strong>로&nbsp;
@@ -491,6 +590,12 @@ export default function PortfolioRisk({ onUpdate, holdings, setHoldings, returns
                     위의 <span className="font-semibold text-midblue">예시 데이터 생성</span> 버튼을 눌러보세요
                   </p>
                 </>
+              ) : holdingsWithWeight.length === 0 ? (
+                <>
+                  <p className="text-3xl mb-2">📦</p>
+                  <p className="font-semibold text-gray-500 text-sm mb-1">보유 종목이 없어 VaR를 계산할 수 없습니다</p>
+                  <p className="text-xs text-gray-400">종목을 추가하거나 저장된 포트폴리오를 불러와 주세요</p>
+                </>
               ) : (
                 <>
                   <p className="text-3xl mb-2">⏳</p>
@@ -505,7 +610,6 @@ export default function PortfolioRisk({ onUpdate, holdings, setHoldings, returns
         </div>
       </div>
 
-      {/* 히스토그램 (전체 너비) */}
       {varResult && (
         <ReturnHistogram
           returnsPct={returnsPct}

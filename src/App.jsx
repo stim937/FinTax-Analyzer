@@ -1,56 +1,134 @@
 import { useState, useMemo, useCallback, useEffect } from 'react'
 import './index.css'
 
-import { supabase }       from './lib/supabase'
-import AuthGuard          from './components/Auth/AuthGuard'
-import Dashboard          from './components/Dashboard'
+import { isSupabaseConfigured, supabase } from './lib/supabase'
+import AuthGuard from './components/Auth/AuthGuard'
+import Dashboard from './components/Dashboard'
 import BondCalculator, { DEFAULT_BOND } from './components/BondCalculator'
 import StockValuation, { DEFAULT_STOCK } from './components/StockValuation'
-import PortfolioRisk, { generateSampleReturns, DEFAULT_HOLDINGS } from './components/PortfolioRisk'
-import TaxEntry           from './components/TaxEntry'
-import TaxValidator       from './components/TaxValidator'
-import TaxReport          from './components/TaxReport'
-import { analyzeTax }     from './utils/taxCalc'
+import PortfolioRisk from './components/PortfolioRisk'
+import { generateSampleReturns, DEFAULT_HOLDINGS } from './components/portfolioDefaults'
+import TaxEntry from './components/TaxEntry'
+import TaxValidator from './components/TaxValidator'
+import TaxReport from './components/TaxReport'
+import { analyzeTax } from './utils/taxCalc'
 
-// ── 탭 정의 ───────────────────────────────────────────────
 const MAIN_TABS = [
   { id: 'finance', label: '금융상품 평가' },
-  { id: 'tax',     label: '세무 자동화' },
+  { id: 'tax', label: '세무 자동화' },
 ]
 
 const FINANCE_TABS = [
   { id: 'dashboard', label: '대시보드' },
-  { id: 'bond',      label: '채권 계산기' },
-  { id: 'stock',     label: '주식 평가' },
+  { id: 'bond', label: '채권 계산기' },
+  { id: 'stock', label: '주식 평가' },
   { id: 'portfolio', label: '포트폴리오 VaR' },
 ]
 
 const TAX_TABS = [
-  { id: 'entry',     label: '거래 입력' },
+  { id: 'entry', label: '거래 입력' },
   { id: 'validator', label: '세무 검증' },
-  { id: 'report',    label: '세무 리포트' },
+  { id: 'report', label: '세무 리포트' },
 ]
 
-// ── 오늘 날짜 포맷 ────────────────────────────────────────
 const TODAY = new Date().toLocaleDateString('ko-KR', {
-  year: 'numeric', month: 'long', day: 'numeric', weekday: 'short',
+  year: 'numeric',
+  month: 'long',
+  day: 'numeric',
+  weekday: 'short',
 })
 
-// ── Pill 서브탭 버튼 ──────────────────────────────────────
+const LOCAL_PORTFOLIO_KEY = 'fintax-portfolio-draft-v1'
+
+function cloneDefaultHoldings() {
+  return DEFAULT_HOLDINGS.map((holding) => ({ ...holding }))
+}
+
+function buildDefaultPortfolioDraft() {
+  return {
+    holdings: cloneDefaultHoldings(),
+    returnsText: generateSampleReturns(),
+  }
+}
+
+function toNumber(value, fallback = 0) {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
+function normalizeHoldings(holdings) {
+  return (Array.isArray(holdings) ? holdings : [])
+    .map((holding, index) => ({
+      id: toNumber(holding?.id, index + 1),
+      name: typeof holding?.name === 'string' ? holding.name : '',
+      ticker: typeof holding?.ticker === 'string' ? holding.ticker.replace(/\D/g, '').slice(0, 6) : '',
+      qty: Math.max(0, toNumber(holding?.qty)),
+      price: Math.max(0, toNumber(holding?.price)),
+    }))
+    .filter((holding) => holding.name.trim() || holding.ticker || holding.qty > 0 || holding.price > 0)
+}
+
+function loadPortfolioDraft() {
+  const fallback = buildDefaultPortfolioDraft()
+
+  if (typeof window === 'undefined') {
+    return fallback
+  }
+
+  try {
+    const raw = window.localStorage.getItem(LOCAL_PORTFOLIO_KEY)
+    if (!raw) {
+      return fallback
+    }
+
+    const parsed = JSON.parse(raw)
+    const holdings = normalizeHoldings(parsed?.holdings)
+    const returnsText = typeof parsed?.returnsText === 'string'
+      ? parsed.returnsText
+      : fallback.returnsText
+
+    return {
+      holdings: holdings.length > 0 ? holdings : fallback.holdings,
+      returnsText,
+    }
+  } catch {
+    return fallback
+  }
+}
+
+function formatDateTime(value) {
+  if (!value) {
+    return ''
+  }
+
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return ''
+  }
+
+  return date.toLocaleString('ko-KR', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
 function SubTabs({ tabs, active, onChange, badge }) {
   return (
     <div className="flex items-center gap-2 mb-5">
-      {tabs.map((v) => (
+      {tabs.map((tab) => (
         <button
-          key={v.id}
-          onClick={() => onChange(v.id)}
+          key={tab.id}
+          onClick={() => onChange(tab.id)}
           className={`px-4 py-1.5 rounded-full text-xs font-semibold transition-colors ${
-            active === v.id
+            active === tab.id
               ? 'bg-navy text-white shadow-sm'
               : 'bg-white text-gray-500 border border-gray-200 hover:border-navy hover:text-navy'
           }`}
         >
-          {v.label}
+          {tab.label}
         </button>
       ))}
       {badge}
@@ -58,11 +136,100 @@ function SubTabs({ tabs, active, onChange, badge }) {
   )
 }
 
-// ── 메인 앱 ───────────────────────────────────────────────
 export default function App() {
-  // ── 인증 상태 ──────────────────────────────────────────
-  const [user,        setUser]        = useState(null)
+  const initialPortfolioDraft = useMemo(() => loadPortfolioDraft(), [])
+
+  const [user, setUser] = useState(null)
   const [authLoading, setAuthLoading] = useState(true)
+
+  const [activeTab, setActiveTab] = useState('finance')
+  const [activeFinanceTab, setActiveFinanceTab] = useState('dashboard')
+  const [activeTaxTab, setActiveTaxTab] = useState('entry')
+
+  const [transactions, setTransactions] = useState([])
+  const [taxResults, setTaxResults] = useState([])
+  const [taxHeader, setTaxHeader] = useState({ company: '', taxYear: 2025 })
+  const [portfolioValue, setPortfolioValue] = useState(0)
+  const [portfolioVaR, setPortfolioVaR] = useState(0)
+  const [portfolioHoldings, setPortfolioHoldings] = useState(initialPortfolioDraft.holdings)
+  const [portfolioReturnsText, setPortfolioReturnsText] = useState(initialPortfolioDraft.returnsText)
+  const [stock, setStock] = useState(DEFAULT_STOCK)
+  const [bond, setBond] = useState(DEFAULT_BOND)
+  const [calcHistory, setCalcHistory] = useState([])
+  const [portfolioSync, setPortfolioSync] = useState({
+    isSaving: false,
+    isRestoring: false,
+    saveError: '',
+    restoreError: '',
+    notice: '',
+    lastSavedAt: '',
+    hasRemoteSnapshot: false,
+    hasCheckedRemote: false,
+  })
+
+  const restorePortfolio = useCallback(async (userId) => {
+    if (!supabase || !userId) {
+      return
+    }
+
+    setPortfolioSync((prev) => ({
+      ...prev,
+      isRestoring: true,
+      restoreError: '',
+      saveError: '',
+      notice: '',
+    }))
+
+    const { data, error } = await supabase
+      .from('portfolio_snapshots')
+      .select('holdings, returns_text, total_value, var95_pct, updated_at')
+      .eq('user_id', userId)
+      .maybeSingle()
+
+    if (error) {
+      setPortfolioSync((prev) => ({
+        ...prev,
+        isRestoring: false,
+        restoreError: '저장된 포트폴리오를 불러오지 못했습니다. 스키마와 RLS 정책을 확인해 주세요.',
+        hasCheckedRemote: true,
+      }))
+      return
+    }
+
+    if (!data) {
+      setPortfolioSync((prev) => ({
+        ...prev,
+        isRestoring: false,
+        restoreError: '',
+        notice: '저장된 포트폴리오가 없어 현재 브라우저 초안 상태를 유지합니다.',
+        hasRemoteSnapshot: false,
+        hasCheckedRemote: true,
+      }))
+      return
+    }
+
+    const restoredHoldings = normalizeHoldings(data.holdings)
+    const restoredReturnsText = typeof data.returns_text === 'string' ? data.returns_text : ''
+
+    setPortfolioHoldings(restoredHoldings)
+    setPortfolioReturnsText(restoredReturnsText)
+    setPortfolioValue(toNumber(data.total_value))
+    setPortfolioVaR(toNumber(data.var95_pct))
+    setActiveTab('finance')
+    setActiveFinanceTab('portfolio')
+
+    setPortfolioSync((prev) => ({
+      ...prev,
+      isRestoring: false,
+      restoreError: '',
+      notice: restoredHoldings.length === 0
+        ? '저장된 포트폴리오는 비어 있습니다. 종목을 추가한 뒤 다시 저장해 주세요.'
+        : '저장된 포트폴리오를 복원했습니다.',
+      lastSavedAt: data.updated_at ?? '',
+      hasRemoteSnapshot: true,
+      hasCheckedRemote: true,
+    }))
+  }, [])
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -77,29 +244,25 @@ export default function App() {
     return () => subscription.unsubscribe()
   }, [])
 
-  // ── 탭 상태 ────────────────────────────────────────────
-  const [activeTab,        setActiveTab]        = useState('finance')
-  const [activeFinanceTab, setActiveFinanceTab] = useState('dashboard')
-  const [activeTaxTab,     setActiveTaxTab]     = useState('entry')
-
-  // ── 도메인 데이터 ──────────────────────────────────────
-  const [transactions,         setTransactions]         = useState([])
-  const [taxResults,           setTaxResults]           = useState([])
-  const [taxHeader,            setTaxHeader]            = useState({ company: '', taxYear: 2025 })
-  const [portfolioValue,       setPortfolioValue]       = useState(0)
-  const [portfolioVaR,         setPortfolioVaR]         = useState(0)
-  const [portfolioHoldings,    setPortfolioHoldings]    = useState(DEFAULT_HOLDINGS)
-  const [portfolioReturnsText, setPortfolioReturnsText] = useState(() => generateSampleReturns())
-  const [stock,                setStock]                = useState(DEFAULT_STOCK)
-  const [bond,                 setBond]                 = useState(DEFAULT_BOND)
-  const [calcHistory,          setCalcHistory]          = useState([])
-
-  // ── Supabase 데이터 로딩 (로그인 시) ──────────────────
   useEffect(() => {
-    if (!user) return
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    const draft = {
+      holdings: normalizeHoldings(portfolioHoldings),
+      returnsText: portfolioReturnsText,
+    }
+
+    window.localStorage.setItem(LOCAL_PORTFOLIO_KEY, JSON.stringify(draft))
+  }, [portfolioHoldings, portfolioReturnsText])
+
+  useEffect(() => {
+    if (!user) {
+      return
+    }
 
     async function loadUserData() {
-      // 거래 내역
       const { data: txData } = await supabase
         .from('transactions')
         .select('*')
@@ -107,21 +270,20 @@ export default function App() {
         .order('date', { ascending: true })
 
       if (txData && txData.length > 0) {
-        const txs = txData.map((r) => ({
-          id:     r.id,
-          date:   r.date   ?? '',
-          name:   r.name   ?? '',
-          type:   r.type   ?? '매수',
-          qty:    Number(r.qty)    || 0,
-          price:  Number(r.price)  || 0,
-          amount: Number(r.amount) || 0,
-          memo:   r.memo   ?? '',
+        const txs = txData.map((row) => ({
+          id: row.id,
+          date: row.date ?? '',
+          name: row.name ?? '',
+          type: row.type ?? '매수',
+          qty: Number(row.qty) || 0,
+          price: Number(row.price) || 0,
+          amount: Number(row.amount) || 0,
+          memo: row.memo ?? '',
         }))
         setTransactions(txs)
         setTaxResults(analyzeTax(txs))
       }
 
-      // 계산 이력
       const { data: histData } = await supabase
         .from('calc_history')
         .select('*')
@@ -130,64 +292,72 @@ export default function App() {
         .limit(20)
 
       if (histData && histData.length > 0) {
-        // type별 최신 1건만 유지 (DB에 중복 행이 있어도 안전하게 처리)
         const seen = new Set()
         setCalcHistory(
           histData
-            .filter((r) => {
-              if (seen.has(r.type)) return false
-              seen.add(r.type)
+            .filter((row) => {
+              if (seen.has(row.type)) {
+                return false
+              }
+              seen.add(row.type)
               return true
             })
-            .map((r) => ({
-              id:     r.id,
-              name:   r.label ?? '',
-              type:   r.type  ?? '',
-              result: r.value ?? '',
-              date:   new Date(r.created_at).toLocaleDateString('ko-KR'),
+            .map((row) => ({
+              id: row.id,
+              name: row.label ?? '',
+              type: row.type ?? '',
+              result: row.value ?? '',
+              date: new Date(row.created_at).toLocaleDateString('ko-KR'),
             })),
         )
       }
 
-      // 세무 헤더 (localStorage 보조 저장)
       try {
-        const saved = localStorage.getItem(`taxHeader_${user.id}`)
-        if (saved) setTaxHeader(JSON.parse(saved))
-      } catch (_) {}
+        const savedHeader = localStorage.getItem(`taxHeader_${user.id}`)
+        if (savedHeader) {
+          setTaxHeader(JSON.parse(savedHeader))
+        }
+      } catch (error) {
+        console.warn('[TaxHeader] 저장된 헤더를 복원하지 못했습니다.', error)
+      }
+
+      await restorePortfolio(user.id)
     }
 
-    loadUserData()
-  }, [user])
+    void loadUserData()
+  }, [restorePortfolio, user])
 
-  // ── 계산 이력 (최대 20건, 같은 type 은 upsert) ────────
   const addHistory = useCallback((entry) => {
     setCalcHistory((prev) => {
-      const filtered = prev.filter((h) => h.type !== entry.type)
+      const filtered = prev.filter((history) => history.type !== entry.type)
       return [
         { ...entry, id: Date.now(), date: new Date().toLocaleDateString('ko-KR') },
         ...filtered,
       ].slice(0, 20)
     })
 
-    // Supabase 동기화 (fire-and-forget) — (user_id, type) unique 기준 upsert
     if (user) {
-      supabase
+      void supabase
         .from('calc_history')
         .upsert(
-          { user_id: user.id, type: entry.type, label: entry.name, value: entry.result, created_at: new Date().toISOString() },
+          {
+            user_id: user.id,
+            type: entry.type,
+            label: entry.name,
+            value: entry.result,
+            created_at: new Date().toISOString(),
+          },
           { onConflict: 'user_id,type' },
         )
     }
   }, [user])
 
-  // ── 세무 유보 잔액 ─────────────────────────────────────
   const taxReserve = taxResults.length > 0
     ? taxResults[taxResults.length - 1].runningReserve
     : 0
 
-  // ── 대시보드 요약 데이터 ───────────────────────────────
   const summaryData = useMemo(() => ({
-    totalAssets:  portfolioValue > 0
+    totalAssets: portfolioValue > 0
       ? `₩ ${portfolioValue.toLocaleString('ko-KR')}`
       : '₩ 0',
     portfolioVaR: portfolioVaR > 0
@@ -198,15 +368,90 @@ export default function App() {
       : '₩ 0',
   }), [portfolioValue, portfolioVaR, taxReserve])
 
-  // ── 콜백 ──────────────────────────────────────────────
+  const handlePortfolioSave = useCallback(async () => {
+    if (!supabase || !user?.id) {
+      setPortfolioSync((prev) => ({
+        ...prev,
+        saveError: '로그인 상태를 확인한 뒤 다시 시도해 주세요.',
+        notice: '',
+      }))
+      return
+    }
+
+    const sanitizedHoldings = normalizeHoldings(portfolioHoldings)
+    if (sanitizedHoldings.length === 0) {
+      setPortfolioSync((prev) => ({
+        ...prev,
+        saveError: '저장할 종목이 없습니다. 종목을 추가한 뒤 다시 시도해 주세요.',
+        notice: '',
+      }))
+      return
+    }
+
+    const parsedReturns = portfolioReturnsText
+      .split(/[\s,]+/)
+      .map(Number)
+      .filter((value) => Number.isFinite(value))
+
+    if (parsedReturns.length < 20) {
+      setPortfolioSync((prev) => ({
+        ...prev,
+        saveError: '수익률 데이터는 최소 20개 이상 입력해야 저장할 수 있습니다.',
+        notice: '',
+      }))
+      return
+    }
+
+    setPortfolioSync((prev) => ({
+      ...prev,
+      isSaving: true,
+      saveError: '',
+      restoreError: '',
+      notice: '',
+    }))
+
+    const payload = {
+      user_id: user.id,
+      holdings: sanitizedHoldings,
+      returns_text: portfolioReturnsText.trim(),
+      total_value: portfolioValue,
+      var95_pct: portfolioVaR,
+    }
+
+    const { data, error } = await supabase
+      .from('portfolio_snapshots')
+      .upsert(payload, { onConflict: 'user_id' })
+      .select('updated_at')
+      .single()
+
+    if (error) {
+      setPortfolioSync((prev) => ({
+        ...prev,
+        isSaving: false,
+        saveError: '저장 중 오류가 발생했습니다. Supabase 권한과 테이블 구성을 확인해 주세요.',
+        notice: '',
+      }))
+      return
+    }
+
+    setPortfolioSync((prev) => ({
+      ...prev,
+      isSaving: false,
+      saveError: '',
+      notice: '포트폴리오가 클라우드에 저장되었습니다.',
+      lastSavedAt: data?.updated_at ?? new Date().toISOString(),
+      hasRemoteSnapshot: true,
+      hasCheckedRemote: true,
+    }))
+  }, [portfolioHoldings, portfolioReturnsText, portfolioValue, portfolioVaR, user])
 
   const handlePortfolioUpdate = useCallback(({ totalValue, var95pct }) => {
     setPortfolioValue(totalValue)
     setPortfolioVaR(var95pct)
     if (totalValue > 0) {
       addHistory({
-        name:   '포트폴리오',
-        type:   'VaR분석',
+        name: '포트폴리오',
+        type: 'VaR분석',
         result: `총 ₩${Math.round(totalValue).toLocaleString('ko-KR')} · VaR ${var95pct.toFixed(2)}%`,
       })
     }
@@ -219,7 +464,6 @@ export default function App() {
     setTaxHeader(data.header ?? { company: '', taxYear: 2025 })
     setActiveTaxTab('validator')
 
-    // Supabase 저장
     if (user) {
       await supabase.from('transactions').delete().eq('user_id', user.id)
 
@@ -227,34 +471,43 @@ export default function App() {
         await supabase.from('transactions').insert(
           data.transactions.map((tx) => ({
             user_id: user.id,
-            date:    tx.date,
-            name:    tx.name,
-            type:    tx.type,
-            qty:     tx.qty,
-            price:   tx.price,
-            amount:  tx.qty * tx.price,
-            memo:    tx.memo ?? '',
+            date: tx.date,
+            name: tx.name,
+            type: tx.type,
+            qty: tx.qty,
+            price: tx.price,
+            amount: tx.qty * tx.price,
+            memo: tx.memo ?? '',
           })),
         )
       }
 
       try {
         localStorage.setItem(`taxHeader_${user.id}`, JSON.stringify(data.header))
-      } catch (_) {}
+      } catch (error) {
+        console.warn('[TaxHeader] 헤더를 저장하지 못했습니다.', error)
+      }
     }
 
     const reserve = results.length > 0 ? results[results.length - 1].runningReserve : 0
     addHistory({
-      name:   data.header?.company || '세무',
-      type:   '세무검증',
+      name: data.header?.company || '세무',
+      type: '세무검증',
       result: `유보 ₩${Math.abs(Math.round(reserve)).toLocaleString('ko-KR')} · ${data.transactions.length}건`,
     })
   }, [addHistory, user])
 
   const handleQuickAction = useCallback((action) => {
-    if (action === '채권 계산') { setActiveFinanceTab('bond') }
-    if (action === '주식 평가') { setActiveFinanceTab('stock') }
-    if (action === '세무 검증') { setActiveTab('tax'); setActiveTaxTab('validator') }
+    if (action === '채권 계산') {
+      setActiveFinanceTab('bond')
+    }
+    if (action === '주식 평가') {
+      setActiveFinanceTab('stock')
+    }
+    if (action === '세무 검증') {
+      setActiveTab('tax')
+      setActiveTaxTab('validator')
+    }
   }, [])
 
   const handleSignOut = useCallback(async () => {
@@ -263,14 +516,21 @@ export default function App() {
     setTaxResults([])
     setCalcHistory([])
     setTaxHeader({ company: '', taxYear: 2025 })
+    setPortfolioSync({
+      isSaving: false,
+      isRestoring: false,
+      saveError: '',
+      restoreError: '',
+      notice: '',
+      lastSavedAt: '',
+      hasRemoteSnapshot: false,
+      hasCheckedRemote: false,
+    })
   }, [])
 
-  // ── 렌더링 ────────────────────────────────────────────
   return (
     <AuthGuard user={user} loading={authLoading}>
       <div className="min-h-screen bg-gray-50">
-
-        {/* ── 헤더 ── */}
         <header className="bg-navy shadow-md">
           <div className="max-w-screen-xl mx-auto px-6 py-4 flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -307,7 +567,6 @@ export default function App() {
           </div>
         </header>
 
-        {/* ── 메인 탭 내비 ── */}
         <nav className="bg-white border-b border-gray-200 sticky top-0 z-10 shadow-sm">
           <div className="max-w-screen-xl mx-auto px-6 flex gap-0">
             {MAIN_TABS.map((tab) => (
@@ -320,16 +579,14 @@ export default function App() {
                     : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
                 }`}
               >
-                {tab.id === 'finance' ? '📊 ' : '🧾 '}{tab.label}
+                {tab.id === 'finance' ? '📊 ' : '🧾 '}
+                {tab.label}
               </button>
             ))}
           </div>
         </nav>
 
-        {/* ── 메인 콘텐츠 ── */}
         <main className="max-w-screen-xl mx-auto p-6">
-
-          {/* ════ 금융상품 평가 탭 ════ */}
           {activeTab === 'finance' && (
             <>
               <SubTabs
@@ -369,12 +626,27 @@ export default function App() {
                   setHoldings={setPortfolioHoldings}
                   returnsText={portfolioReturnsText}
                   setReturnsText={setPortfolioReturnsText}
+                  cloudState={{
+                    isSupabaseConfigured,
+                    userEmail: user?.email ?? '',
+                    isSaving: portfolioSync.isSaving,
+                    isRestoring: portfolioSync.isRestoring,
+                    saveError: portfolioSync.saveError,
+                    restoreError: portfolioSync.restoreError,
+                    notice: portfolioSync.notice,
+                    lastSavedAt: formatDateTime(portfolioSync.lastSavedAt),
+                    hasRemoteSnapshot: portfolioSync.hasRemoteSnapshot,
+                    hasCheckedRemote: portfolioSync.hasCheckedRemote,
+                  }}
+                  cloudActions={{
+                    onSave: handlePortfolioSave,
+                    onRestore: () => restorePortfolio(user?.id),
+                  }}
                 />
               )}
             </>
           )}
 
-          {/* ════ 세무 자동화 탭 ════ */}
           {activeTab === 'tax' && (
             <>
               <SubTabs
@@ -409,7 +681,6 @@ export default function App() {
           )}
         </main>
 
-        {/* ── 푸터 ── */}
         <footer className="mt-12 border-t border-gray-200 bg-white">
           <div className="max-w-screen-xl mx-auto px-6 py-4 flex items-center justify-between text-xs text-gray-400">
             <span>FinTax Analyzer — 금융자산 평가 &amp; 세무자동화</span>
