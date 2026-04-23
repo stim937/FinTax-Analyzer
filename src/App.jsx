@@ -580,6 +580,15 @@ export default function App() {
       : '₩ 0',
   }), [portfolioValue, portfolioVaR, taxReserve])
 
+  const summaryLoading = Boolean(
+    user
+    && (
+      portfolioSync.isRestoring
+      || portfolioReturnSync.loading
+      || !portfolioSync.hasCheckedRemote
+    ),
+  )
+
   const handlePortfolioSave = useCallback(async () => {
     if (!supabase || !user?.id) {
       setPortfolioSync((prev) => ({
@@ -807,6 +816,7 @@ export default function App() {
               {activeFinanceTab === 'dashboard' && (
                 <Dashboard
                   summaryData={summaryData}
+                  summaryLoading={summaryLoading}
                   onQuickAction={handleQuickAction}
                   history={calcHistory}
                 />
