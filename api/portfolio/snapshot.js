@@ -1,7 +1,98 @@
 /* global process */
 
 import { createClient } from '@supabase/supabase-js'
-import { getKisAccessToken, getKisStockQuote, isKisConfigured } from '../market/kis.js'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+
+const KIS_BASE = 'https://openapi.koreainvestment.com:9443'
+const TOKEN_CACHE_PATH = path.join(os.tmpdir(), 'fintax-kis-token.json')
+let cachedAccessToken = ''
+let cachedAccessTokenExpiresAt = 0
+
+function isKisConfigured() {
+  return Boolean(process.env.KIS_APP_KEY && process.env.KIS_APP_SECRET)
+}
+
+async function getKisAccessToken() {
+  const now = Date.now()
+  if (cachedAccessToken && now < cachedAccessTokenExpiresAt - 60_000) {
+    return cachedAccessToken
+  }
+
+  try {
+    const raw = await fs.readFile(TOKEN_CACHE_PATH, 'utf8')
+    const saved = JSON.parse(raw)
+    if (saved?.accessToken && now < Number(saved.expiresAt) - 60_000) {
+      cachedAccessToken = saved.accessToken
+      cachedAccessTokenExpiresAt = Number(saved.expiresAt)
+      return cachedAccessToken
+    }
+  } catch {}
+
+  const response = await fetch(`${KIS_BASE}/oauth2/tokenP`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      grant_type: 'client_credentials',
+      appkey: process.env.KIS_APP_KEY,
+      appsecret: process.env.KIS_APP_SECRET,
+    }),
+  })
+
+  const data = await response.json()
+
+  if (!response.ok || !data?.access_token) {
+    if (data?.error_code === 'EGW00133' && cachedAccessToken) {
+      return cachedAccessToken
+    }
+    throw new Error(data?.msg1 || 'KIS 액세스 토큰 발급에 실패했습니다.')
+  }
+
+  cachedAccessToken = data.access_token
+  cachedAccessTokenExpiresAt = now + (Number(data.expires_in) || 3600) * 1000
+  try {
+    await fs.writeFile(
+      TOKEN_CACHE_PATH,
+      JSON.stringify({
+        accessToken: cachedAccessToken,
+        expiresAt: cachedAccessTokenExpiresAt,
+      }),
+      'utf8',
+    )
+  } catch {}
+  return cachedAccessToken
+}
+
+async function getKisStockQuote(ticker, accessToken) {
+  const response = await fetch(
+    `${KIS_BASE}/uapi/domestic-stock/v1/quotations/inquire-price` +
+      `?FID_COND_MRKT_DIV_CODE=J&FID_INPUT_ISCD=${ticker}`,
+    {
+      headers: {
+        'content-type': 'application/json; charset=utf-8',
+        authorization: `Bearer ${accessToken}`,
+        appkey: process.env.KIS_APP_KEY,
+        appsecret: process.env.KIS_APP_SECRET,
+        tr_id: 'FHKST01010100',
+        custtype: 'P',
+      },
+    },
+  )
+
+  const data = await response.json()
+  const output = data?.output
+
+  if (!response.ok || !output?.stck_prpr) {
+    throw new Error(data?.msg1 || 'KIS 시세 응답이 올바르지 않습니다.')
+  }
+
+  return {
+    ticker,
+    price: Number(output.stck_prpr),
+    name: output.hts_kor_isnm,
+  }
+}
 
 function getKstDateParts(date = new Date()) {
   const formatter = new Intl.DateTimeFormat('en-CA', {

@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from 'react'
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import './index.css'
 
 import { isSupabaseConfigured, supabase } from './lib/supabase'
@@ -86,31 +86,32 @@ function serializePortfolioSnapshot(holdings) {
 
 async function attachLivePrices(holdings) {
   const normalized = normalizeHoldings(holdings)
+  const priced = []
 
-  const priced = await Promise.all(
-    normalized.map(async (holding) => {
-      if (!holding.ticker) {
-        return holding
+  for (const holding of normalized) {
+    if (!holding.ticker) {
+      priced.push(holding)
+      continue
+    }
+
+    try {
+      const response = await fetch(`/api/market/stock?ticker=${encodeURIComponent(holding.ticker)}`)
+      const data = await response.json()
+
+      if (!response.ok || !Number(data?.price)) {
+        priced.push({ ...holding, currentPrice: 0 })
+        continue
       }
 
-      try {
-        const response = await fetch(`/api/market/stock?ticker=${encodeURIComponent(holding.ticker)}`)
-        const data = await response.json()
-
-        if (!response.ok || !Number(data?.price)) {
-          return { ...holding, currentPrice: 0 }
-        }
-
-        return {
-          ...holding,
-          name: data.name || holding.name,
-          currentPrice: Number(data.price),
-        }
-      } catch {
-        return { ...holding, currentPrice: 0 }
-      }
-    }),
-  )
+      priced.push({
+        ...holding,
+        name: data.name || holding.name,
+        currentPrice: Number(data.price),
+      })
+    } catch {
+      priced.push({ ...holding, currentPrice: 0 })
+    }
+  }
 
   return priced
 }
@@ -169,6 +170,7 @@ function SubTabs({ tabs, active, onChange, badge }) {
 
 export default function App() {
   const initialPortfolioDraft = useMemo(() => buildDefaultPortfolioDraft(), [])
+  const loadedUserDataRef = useRef('')
 
   const [user, setUser] = useState(null)
   const [authLoading, setAuthLoading] = useState(true)
@@ -327,8 +329,15 @@ export default function App() {
 
   useEffect(() => {
     if (!user) {
+      loadedUserDataRef.current = ''
       return
     }
+
+    if (loadedUserDataRef.current === user.id) {
+      return
+    }
+
+    loadedUserDataRef.current = user.id
 
     async function loadUserData() {
       const { data: txData } = await supabase
