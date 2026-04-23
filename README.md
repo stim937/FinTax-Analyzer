@@ -67,10 +67,13 @@ npm install
 # 프론트엔드만 실행 (Vite)
 npm run dev
 
-# API 함수만 실행 (Vercel Functions)
+# App + API 함께 실행 (권장)
+npm run dev:full
+
+# API 함수만 실행 (Vercel Functions 전용)
 npm run dev:api
 
-# Windows에서 .env.local 로드 후 App + API 함께 실행
+# Windows 더블클릭/명령프롬프트용 래퍼
 ./run-dev-with-api.bat
 
 # 프로덕션 빌드
@@ -81,5 +84,6 @@ npm run build
 
 - `npm run dev`만 실행하면 Vite 프론트엔드만 뜨고 `/api/*` 함수는 동작하지 않습니다.
 - `/api/market/*`를 함께 쓰려면 `Vercel Functions`가 별도로 떠 있어야 합니다.
-- Windows에서는 `run-dev-with-api.bat`를 실행하면 `.env.local`을 먼저 읽고 `vercel dev`를 띄웁니다.
+- `npm run dev:full`이 권장 진입점이며, `.env.local`을 먼저 읽고 `vercel dev`를 띄웁니다.
+- `run-dev-with-api.bat`는 Windows에서 더블클릭이나 `cmd` 실행을 쉽게 하기 위한 얇은 래퍼입니다.
 - 이 방식에서는 앱과 `/api/*`가 모두 `http://127.0.0.1:3000`에서 함께 동작합니다.
