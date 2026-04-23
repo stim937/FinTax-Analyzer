@@ -14,6 +14,10 @@ try {
   console.error('Failed to load stocks.json:', e);
 }
 
+function normalizeQuery(value) {
+  return String(value ?? '').trim().toLowerCase()
+}
+
 async function getAccessToken() {
   const res = await fetch(`${KIS_BASE}/oauth2/tokenP`, {
     method: 'POST',
@@ -36,7 +40,7 @@ export default async function handler(req, res) {
   const { q } = req.query
   if (!q) return res.status(400).json({ error: '검색어(q)가 필요합니다' })
 
-  const query = q.trim().toLowerCase()
+  const query = normalizeQuery(q)
   const isTicker = /^\d{6}$/.test(query)
 
   // 1. 로컬 stocks.json에서 검색 (종목명 또는 코드)
@@ -56,8 +60,9 @@ export default async function handler(req, res) {
 
   // 2. 로컬에 없으면 KIS API 시도 (종목코드인 경우 유리)
   if (!process.env.KIS_APP_KEY || !process.env.KIS_APP_SECRET) {
-    if (isTicker) return res.json({ ticker: query, name: query, mock: true })
-    return res.status(404).json({ error: `'${q}' 종목을 찾을 수 없습니다.` })
+    return res.status(503).json({
+      error: 'KIS API 환경변수가 설정되지 않았습니다. `.env.local`의 `KIS_APP_KEY`, `KIS_APP_SECRET`를 확인해 주세요.',
+    })
   }
 
   try {
@@ -88,9 +93,9 @@ export default async function handler(req, res) {
       })
     }
     
-    // 최종 실패 시 티커 패턴이면 그냥 반환
-    if (isTicker) return res.json({ ticker: query, name: query })
-    return res.status(404).json({ error: `'${q}' 종목을 찾을 수 없습니다.` })
+    return res.status(404).json({
+      error: `'${q}' 종목을 찾지 못했습니다. 종목명 또는 6자리 종목코드를 확인해 주세요.`,
+    })
 
   } catch (err) {
     return res.status(500).json({ error: '종목 검색 실패', detail: err.message })

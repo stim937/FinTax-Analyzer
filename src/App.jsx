@@ -7,7 +7,6 @@ import Dashboard from './components/Dashboard'
 import BondCalculator, { DEFAULT_BOND } from './components/BondCalculator'
 import StockValuation, { DEFAULT_STOCK } from './components/StockValuation'
 import PortfolioRisk from './components/PortfolioRisk'
-import { generateSampleReturns, DEFAULT_HOLDINGS } from './components/portfolioDefaults'
 import TaxEntry from './components/TaxEntry'
 import TaxValidator from './components/TaxValidator'
 import TaxReport from './components/TaxReport'
@@ -38,18 +37,14 @@ const TODAY = new Date().toLocaleDateString('ko-KR', {
   weekday: 'short',
 })
 
-const LOCAL_PORTFOLIO_KEY = 'fintax-portfolio-draft-v1'
-
-function cloneDefaultHoldings() {
-  return DEFAULT_HOLDINGS.map((holding) => ({ ...holding }))
-}
-
 function buildDefaultPortfolioDraft() {
   return {
-    holdings: cloneDefaultHoldings(),
-    returnsText: generateSampleReturns(),
+    holdings: [],
+    returnsText: '',
   }
 }
+
+const PORTFOLIO_TABLE = 'portfolio'
 
 function toNumber(value, fallback = 0) {
   const parsed = Number(value)
@@ -63,37 +58,16 @@ function normalizeHoldings(holdings) {
       name: typeof holding?.name === 'string' ? holding.name : '',
       ticker: typeof holding?.ticker === 'string' ? holding.ticker.replace(/\D/g, '').slice(0, 6) : '',
       qty: Math.max(0, toNumber(holding?.qty)),
-      price: Math.max(0, toNumber(holding?.price)),
+      avgPrice: Math.max(0, toNumber(holding?.avgPrice ?? holding?.avg_price)),
+      currentPrice: Math.max(0, toNumber(holding?.currentPrice ?? holding?.current_price ?? holding?.price)),
     }))
-    .filter((holding) => holding.name.trim() || holding.ticker || holding.qty > 0 || holding.price > 0)
-}
-
-function loadPortfolioDraft() {
-  const fallback = buildDefaultPortfolioDraft()
-
-  if (typeof window === 'undefined') {
-    return fallback
-  }
-
-  try {
-    const raw = window.localStorage.getItem(LOCAL_PORTFOLIO_KEY)
-    if (!raw) {
-      return fallback
-    }
-
-    const parsed = JSON.parse(raw)
-    const holdings = normalizeHoldings(parsed?.holdings)
-    const returnsText = typeof parsed?.returnsText === 'string'
-      ? parsed.returnsText
-      : fallback.returnsText
-
-    return {
-      holdings: holdings.length > 0 ? holdings : fallback.holdings,
-      returnsText,
-    }
-  } catch {
-    return fallback
-  }
+    .filter((holding) => (
+      holding.name.trim() ||
+      holding.ticker ||
+      holding.qty > 0 ||
+      holding.avgPrice > 0 ||
+      holding.currentPrice > 0
+    ))
 }
 
 function formatDateTime(value) {
@@ -137,7 +111,7 @@ function SubTabs({ tabs, active, onChange, badge }) {
 }
 
 export default function App() {
-  const initialPortfolioDraft = useMemo(() => loadPortfolioDraft(), [])
+  const initialPortfolioDraft = useMemo(() => buildDefaultPortfolioDraft(), [])
 
   const [user, setUser] = useState(null)
   const [authLoading, setAuthLoading] = useState(true)
@@ -181,8 +155,8 @@ export default function App() {
     }))
 
     const { data, error } = await supabase
-      .from('portfolio_snapshots')
-      .select('holdings, returns_text, total_value, var95_pct, updated_at')
+      .from(PORTFOLIO_TABLE)
+      .select('holdings, updated_at')
       .eq('user_id', userId)
       .maybeSingle()
 
@@ -197,11 +171,15 @@ export default function App() {
     }
 
     if (!data) {
+      setPortfolioHoldings([])
+      setPortfolioReturnsText('')
+      setPortfolioValue(0)
+      setPortfolioVaR(0)
       setPortfolioSync((prev) => ({
         ...prev,
         isRestoring: false,
         restoreError: '',
-        notice: '저장된 포트폴리오가 없어 현재 브라우저 초안 상태를 유지합니다.',
+        notice: '저장된 포트폴리오가 없습니다. 빈 상태에서 직접 입력해 주세요.',
         hasRemoteSnapshot: false,
         hasCheckedRemote: true,
       }))
@@ -209,12 +187,10 @@ export default function App() {
     }
 
     const restoredHoldings = normalizeHoldings(data.holdings)
-    const restoredReturnsText = typeof data.returns_text === 'string' ? data.returns_text : ''
-
     setPortfolioHoldings(restoredHoldings)
-    setPortfolioReturnsText(restoredReturnsText)
-    setPortfolioValue(toNumber(data.total_value))
-    setPortfolioVaR(toNumber(data.var95_pct))
+    setPortfolioReturnsText('')
+    setPortfolioValue(0)
+    setPortfolioVaR(0)
     setActiveTab('finance')
     setActiveFinanceTab('portfolio')
 
@@ -243,19 +219,6 @@ export default function App() {
 
     return () => subscription.unsubscribe()
   }, [])
-
-  useEffect(() => {
-    if (typeof window === 'undefined') {
-      return
-    }
-
-    const draft = {
-      holdings: normalizeHoldings(portfolioHoldings),
-      returnsText: portfolioReturnsText,
-    }
-
-    window.localStorage.setItem(LOCAL_PORTFOLIO_KEY, JSON.stringify(draft))
-  }, [portfolioHoldings, portfolioReturnsText])
 
   useEffect(() => {
     if (!user) {
@@ -388,20 +351,6 @@ export default function App() {
       return
     }
 
-    const parsedReturns = portfolioReturnsText
-      .split(/[\s,]+/)
-      .map(Number)
-      .filter((value) => Number.isFinite(value))
-
-    if (parsedReturns.length < 20) {
-      setPortfolioSync((prev) => ({
-        ...prev,
-        saveError: '수익률 데이터는 최소 20개 이상 입력해야 저장할 수 있습니다.',
-        notice: '',
-      }))
-      return
-    }
-
     setPortfolioSync((prev) => ({
       ...prev,
       isSaving: true,
@@ -413,13 +362,10 @@ export default function App() {
     const payload = {
       user_id: user.id,
       holdings: sanitizedHoldings,
-      returns_text: portfolioReturnsText.trim(),
-      total_value: portfolioValue,
-      var95_pct: portfolioVaR,
     }
 
     const { data, error } = await supabase
-      .from('portfolio_snapshots')
+      .from(PORTFOLIO_TABLE)
       .upsert(payload, { onConflict: 'user_id' })
       .select('updated_at')
       .single()
@@ -443,7 +389,7 @@ export default function App() {
       hasRemoteSnapshot: true,
       hasCheckedRemote: true,
     }))
-  }, [portfolioHoldings, portfolioReturnsText, portfolioValue, portfolioVaR, user])
+  }, [portfolioHoldings, user])
 
   const handlePortfolioUpdate = useCallback(({ totalValue, var95pct }) => {
     setPortfolioValue(totalValue)
@@ -516,6 +462,10 @@ export default function App() {
     setTaxResults([])
     setCalcHistory([])
     setTaxHeader({ company: '', taxYear: 2025 })
+    setPortfolioHoldings([])
+    setPortfolioReturnsText('')
+    setPortfolioValue(0)
+    setPortfolioVaR(0)
     setPortfolioSync({
       isSaving: false,
       isRestoring: false,

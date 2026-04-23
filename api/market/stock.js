@@ -11,18 +11,7 @@
  * 로컬 개발: vercel dev 사용 또는 .env.local에 KIS 키 설정 후 vercel dev 실행
  */
 
-import fs from 'fs'
-import path from 'path'
-
 const KIS_BASE = 'https://openapi.koreainvestment.com:9443'
-
-const DATA_PATH = path.join(process.cwd(), 'api/market/data/stocks.json')
-let STOCK_MASTER = []
-try {
-  if (fs.existsSync(DATA_PATH)) {
-    STOCK_MASTER = JSON.parse(fs.readFileSync(DATA_PATH, 'utf8'))
-  }
-} catch (_) {}
 
 async function getAccessToken() {
   const res = await fetch(`${KIS_BASE}/oauth2/tokenP`, {
@@ -49,22 +38,9 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'ticker 파라미터가 필요합니다 (예: ?ticker=005930)' })
   }
 
-  // KIS 키가 설정되지 않은 경우 — 개발용 mock 응답
   if (!process.env.KIS_APP_KEY || !process.env.KIS_APP_SECRET) {
-    const MOCK_PRICES = {
-      '005930': { price: 74000,  name: '삼성전자' },
-      '000660': { price: 180000, name: 'SK하이닉스' },
-      '035420': { price: 210000, name: 'NAVER' },
-      '035720': { price: 88000,  name: '카카오' },
-      '051910': { price: 620000, name: 'LG화학' },
-    }
-    const mock = MOCK_PRICES[ticker]
-    if (mock) return res.json({ ticker, ...mock, mock: true })
-    const stockInfo = STOCK_MASTER.find(s => s.ticker === ticker)
-    if (stockInfo) return res.json({ ticker, name: stockInfo.name, mock: true })
-    return res.status(404).json({
-      error: 'KIS_APP_KEY 환경변수가 설정되지 않았습니다. Vercel Dashboard에서 설정하세요.',
-      mock: true,
+    return res.status(503).json({
+      error: 'KIS API 환경변수가 설정되지 않았습니다. `.env.local`의 `KIS_APP_KEY`, `KIS_APP_SECRET`를 확인해 주세요.',
     })
   }
 
