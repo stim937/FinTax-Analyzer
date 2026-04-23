@@ -40,7 +40,6 @@ const TODAY = new Date().toLocaleDateString('ko-KR', {
 function buildDefaultPortfolioDraft() {
   return {
     holdings: [],
-    returnsText: '',
   }
 }
 
@@ -68,6 +67,21 @@ function normalizeHoldings(holdings) {
       holding.avgPrice > 0 ||
       holding.currentPrice > 0
     ))
+}
+
+function buildPortfolioSnapshot(holdings) {
+  return normalizeHoldings(holdings)
+    .map(({ id, name, ticker, qty, avgPrice }) => ({
+      id,
+      name,
+      ticker,
+      qty,
+      avgPrice,
+    }))
+}
+
+function serializePortfolioSnapshot(holdings) {
+  return JSON.stringify(buildPortfolioSnapshot(holdings))
 }
 
 async function attachLivePrices(holdings) {
@@ -120,6 +134,18 @@ function formatDateTime(value) {
   })
 }
 
+function normalizePortfolioReturnRows(rows) {
+  return (Array.isArray(rows) ? rows : [])
+    .map((row) => ({
+      tradeDate: row?.trade_date ?? '',
+      returnPct: Number(row?.return_pct),
+      portfolioValue: Math.max(0, Number(row?.portfolio_value) || 0),
+      meta: row?.meta && typeof row.meta === 'object' ? row.meta : {},
+    }))
+    .filter((row) => row.tradeDate)
+    .sort((a, b) => a.tradeDate.localeCompare(b.tradeDate))
+}
+
 function SubTabs({ tabs, active, onChange, badge }) {
   return (
     <div className="flex items-center gap-2 mb-5">
@@ -157,7 +183,7 @@ export default function App() {
   const [portfolioValue, setPortfolioValue] = useState(0)
   const [portfolioVaR, setPortfolioVaR] = useState(0)
   const [portfolioHoldings, setPortfolioHoldings] = useState(initialPortfolioDraft.holdings)
-  const [portfolioReturnsText, setPortfolioReturnsText] = useState(initialPortfolioDraft.returnsText)
+  const [portfolioReturnSeries, setPortfolioReturnSeries] = useState([])
   const [stock, setStock] = useState(DEFAULT_STOCK)
   const [bond, setBond] = useState(DEFAULT_BOND)
   const [calcHistory, setCalcHistory] = useState([])
@@ -170,9 +196,17 @@ export default function App() {
     lastSavedAt: '',
     hasRemoteSnapshot: false,
     hasCheckedRemote: false,
+    savedSnapshot: '[]',
+  })
+  const [portfolioReturnSync, setPortfolioReturnSync] = useState({
+    loading: false,
+    error: '',
+    lastCapturedAt: '',
   })
 
-  const restorePortfolio = useCallback(async (userId) => {
+  const restorePortfolio = useCallback(async (userId, options = {}) => {
+    const { navigate = false } = options
+
     if (!supabase || !userId) {
       return
     }
@@ -203,7 +237,6 @@ export default function App() {
 
     if (!data) {
       setPortfolioHoldings([])
-      setPortfolioReturnsText('')
       setPortfolioValue(0)
       setPortfolioVaR(0)
       setPortfolioSync((prev) => ({
@@ -213,17 +246,21 @@ export default function App() {
         notice: '저장된 포트폴리오가 없습니다. 빈 상태에서 직접 입력해 주세요.',
         hasRemoteSnapshot: false,
         hasCheckedRemote: true,
+        savedSnapshot: '[]',
       }))
       return
     }
 
     const restoredHoldings = await attachLivePrices(data.holdings)
+    const savedSnapshot = serializePortfolioSnapshot(data.holdings)
     setPortfolioHoldings(restoredHoldings)
-    setPortfolioReturnsText('')
     setPortfolioValue(0)
     setPortfolioVaR(0)
-    setActiveTab('finance')
-    setActiveFinanceTab('portfolio')
+
+    if (navigate) {
+      setActiveTab('finance')
+      setActiveFinanceTab('portfolio')
+    }
 
     setPortfolioSync((prev) => ({
       ...prev,
@@ -231,11 +268,48 @@ export default function App() {
       restoreError: '',
       notice: restoredHoldings.length === 0
         ? '저장된 포트폴리오는 비어 있습니다. 종목을 추가한 뒤 다시 저장해 주세요.'
-        : '저장된 포트폴리오를 복원했습니다.',
+        : '',
       lastSavedAt: data.updated_at ?? '',
       hasRemoteSnapshot: true,
       hasCheckedRemote: true,
+      savedSnapshot,
     }))
+  }, [])
+
+  const restorePortfolioReturns = useCallback(async (userId) => {
+    if (!supabase || !userId) {
+      return
+    }
+
+    setPortfolioReturnSync((prev) => ({
+      ...prev,
+      loading: true,
+      error: '',
+    }))
+
+    const { data, error } = await supabase
+      .from('portfolio_returns')
+      .select('trade_date, return_pct, portfolio_value, meta, created_at')
+      .eq('user_id', userId)
+      .order('trade_date', { ascending: true })
+
+    if (error) {
+      setPortfolioReturnSeries([])
+      setPortfolioReturnSync({
+        loading: false,
+        error: '일별 수익률 기록을 불러오지 못했습니다.',
+        lastCapturedAt: '',
+      })
+      return
+    }
+
+    const rows = normalizePortfolioReturnRows(data)
+    setPortfolioReturnSeries(rows)
+    setPortfolioReturnSync({
+      loading: false,
+      error: '',
+      lastCapturedAt: data?.length ? data[data.length - 1]?.created_at ?? '' : '',
+    })
   }, [])
 
   useEffect(() => {
@@ -315,11 +389,14 @@ export default function App() {
         console.warn('[TaxHeader] 저장된 헤더를 복원하지 못했습니다.', error)
       }
 
-      await restorePortfolio(user.id)
+      await Promise.all([
+        restorePortfolio(user.id),
+        restorePortfolioReturns(user.id),
+      ])
     }
 
     void loadUserData()
-  }, [restorePortfolio, user])
+  }, [restorePortfolio, restorePortfolioReturns, user])
 
   const addHistory = useCallback((entry) => {
     setCalcHistory((prev) => {
@@ -392,8 +469,9 @@ export default function App() {
 
     const payload = {
       user_id: user.id,
-      holdings: sanitizedHoldings.map(({ currentPrice, ...holding }) => holding),
+      holdings: buildPortfolioSnapshot(sanitizedHoldings),
     }
+    const savedSnapshot = serializePortfolioSnapshot(payload.holdings)
 
     const { data, error } = await supabase
       .from(PORTFOLIO_TABLE)
@@ -419,8 +497,15 @@ export default function App() {
       lastSavedAt: data?.updated_at ?? new Date().toISOString(),
       hasRemoteSnapshot: true,
       hasCheckedRemote: true,
+      savedSnapshot,
     }))
   }, [portfolioHoldings, user])
+
+  const hasPortfolioChanges = useMemo(() => {
+    const currentSnapshot = serializePortfolioSnapshot(portfolioHoldings)
+    const savedSnapshot = portfolioSync.savedSnapshot ?? '[]'
+    return currentSnapshot !== savedSnapshot
+  }, [portfolioHoldings, portfolioSync.savedSnapshot])
 
   const handlePortfolioUpdate = useCallback(({ totalValue, var95pct }) => {
     setPortfolioValue(totalValue)
@@ -494,7 +579,7 @@ export default function App() {
     setCalcHistory([])
     setTaxHeader({ company: '', taxYear: 2025 })
     setPortfolioHoldings([])
-    setPortfolioReturnsText('')
+    setPortfolioReturnSeries([])
     setPortfolioValue(0)
     setPortfolioVaR(0)
     setPortfolioSync({
@@ -506,6 +591,12 @@ export default function App() {
       lastSavedAt: '',
       hasRemoteSnapshot: false,
       hasCheckedRemote: false,
+      savedSnapshot: '[]',
+    })
+    setPortfolioReturnSync({
+      loading: false,
+      error: '',
+      lastCapturedAt: '',
     })
   }, [])
 
@@ -605,8 +696,7 @@ export default function App() {
                   onUpdate={handlePortfolioUpdate}
                   holdings={portfolioHoldings}
                   setHoldings={setPortfolioHoldings}
-                  returnsText={portfolioReturnsText}
-                  setReturnsText={setPortfolioReturnsText}
+                  returnSeries={portfolioReturnSeries}
                   cloudState={{
                     isSupabaseConfigured,
                     userEmail: user?.email ?? '',
@@ -618,10 +708,13 @@ export default function App() {
                     lastSavedAt: formatDateTime(portfolioSync.lastSavedAt),
                     hasRemoteSnapshot: portfolioSync.hasRemoteSnapshot,
                     hasCheckedRemote: portfolioSync.hasCheckedRemote,
+                    hasPortfolioChanges,
+                    returnHistoryLoading: portfolioReturnSync.loading,
+                    returnHistoryError: portfolioReturnSync.error,
+                    lastCapturedAt: formatDateTime(portfolioReturnSync.lastCapturedAt),
                   }}
                   cloudActions={{
                     onSave: handlePortfolioSave,
-                    onRestore: () => restorePortfolio(user?.id),
                   }}
                 />
               )}

@@ -2,7 +2,6 @@ import { useState, useMemo, useEffect, useRef } from 'react'
 import UITooltip from './ui/Tooltip'
 import FormattedInput from './ui/FormattedInput'
 import Spinner from './ui/Spinner'
-import { generateSampleReturns } from './portfolioDefaults'
 import {
   Chart as ChartJS,
   ArcElement,
@@ -224,8 +223,7 @@ export default function PortfolioRisk({
   onUpdate,
   holdings,
   setHoldings,
-  returnsText,
-  setReturnsText,
+  returnSeries,
   cloudState,
   cloudActions,
 }) {
@@ -312,10 +310,17 @@ export default function PortfolioRisk({
     }
   }, [holdings, lookupState])
 
-  const returnsPct = useMemo(() => returnsText
-    .split(/[\s,]+/)
-    .map(Number)
-    .filter((value) => !Number.isNaN(value) && Number.isFinite(value)), [returnsText])
+  const returnRows = useMemo(
+    () => (Array.isArray(returnSeries) ? returnSeries : []),
+    [returnSeries],
+  )
+
+  const returnsPct = useMemo(
+    () => returnRows
+      .map((row) => Number(row.returnPct))
+      .filter((value) => !Number.isNaN(value) && Number.isFinite(value)),
+    [returnRows],
+  )
 
   const varResult = useMemo(() => {
     if (returnsPct.length < 20 || totalValue <= 0) {
@@ -368,7 +373,6 @@ export default function PortfolioRisk({
         message: '',
         tone: '',
         lastKey: '',
-        updatedAt: 0,
         ...prev[id],
         updatedAt: Date.now(),
         ...patch,
@@ -514,9 +518,13 @@ export default function PortfolioRisk({
     lastSavedAt,
     hasRemoteSnapshot,
     hasCheckedRemote,
+    hasPortfolioChanges,
+    returnHistoryLoading,
+    returnHistoryError,
+    lastCapturedAt,
   } = cloudState ?? {}
 
-  const { onSave, onRestore } = cloudActions ?? {}
+  const { onSave } = cloudActions ?? {}
 
   return (
     <div className="space-y-6">
@@ -596,16 +604,8 @@ export default function PortfolioRisk({
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={onRestore}
-                disabled={!isSupabaseConfigured || isRestoring || isSaving}
-                className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-gray-200 text-xs font-semibold text-gray-700 hover:border-midblue hover:text-midblue transition disabled:opacity-50"
-              >
-                {isRestoring ? <Spinner size="xs" label="" /> : '불러오기'}
-              </button>
-              <button
-                type="button"
                 onClick={onSave}
-                disabled={!isSupabaseConfigured || isSaving || isRestoring}
+                disabled={!isSupabaseConfigured || isSaving || isRestoring || !hasPortfolioChanges}
                 className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-500 transition disabled:opacity-50"
               >
                 {isSaving ? <Spinner size="xs" label="" /> : '저장'}
@@ -807,29 +807,79 @@ export default function PortfolioRisk({
           <div className="bg-white rounded-xl shadow-sm p-6">
             <div className="flex items-center justify-between border-b border-gray-100 pb-3 mb-4">
               <div>
-                <h2 className="text-base font-semibold text-gray-700">일별 수익률 입력</h2>
-                <p className="text-xs text-gray-400 mt-0.5">쉼표로 구분, % 단위 (예: 1.2, -0.8, 0.3)</p>
+                <h2 className="text-base font-semibold text-gray-700">일별 수익률 히스토리</h2>
+                <p className="text-xs text-gray-400 mt-0.5">장 마감 후 저장된 포트폴리오 평가금액 기준</p>
               </div>
-              <button
-                onClick={() => setReturnsText(generateSampleReturns())}
-                className="px-3 py-1.5 rounded-lg border border-midblue text-midblue text-xs font-semibold hover:bg-accent transition whitespace-nowrap"
-              >
-                예시 데이터 생성
-              </button>
+              {returnHistoryLoading && <Spinner size="xs" label="" />}
             </div>
-            <textarea
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-midblue resize-none"
-              rows={5}
-              value={returnsText}
-              onChange={(event) => setReturnsText(event.target.value)}
-              placeholder="일별 수익률을 쉼표로 구분하여 입력하세요"
-            />
-            <p className="text-xs text-gray-400 mt-1.5">
-              입력된 데이터: <span className="font-semibold text-gray-600">{returnsPct.length}개</span>
-              {returnsPct.length < 20 && returnsPct.length > 0 && (
-                <span className="text-amber-500 ml-2">⚠ 최소 20개 이상 필요</span>
-              )}
-            </p>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div className="rounded-xl bg-slate-50 px-4 py-3">
+                <p className="text-xs font-semibold text-gray-400">최근 적재일</p>
+                <p className="mt-1 text-sm font-bold text-gray-700">{returnRows.at(-1)?.tradeDate || '-'}</p>
+              </div>
+              <div className="rounded-xl bg-slate-50 px-4 py-3">
+                <p className="text-xs font-semibold text-gray-400">누적 데이터</p>
+                <p className="mt-1 text-sm font-bold text-gray-700">{returnsPct.length}일</p>
+              </div>
+              <div className="rounded-xl bg-slate-50 px-4 py-3">
+                <p className="text-xs font-semibold text-gray-400">VaR 계산 상태</p>
+                <p className={`mt-1 text-sm font-bold ${returnsPct.length >= 20 ? 'text-emerald-600' : 'text-amber-600'}`}>
+                  {returnsPct.length >= 20 ? '계산 가능' : `${20 - returnsPct.length}일 더 필요`}
+                </p>
+              </div>
+            </div>
+
+            {lastCapturedAt && (
+              <p className="mt-3 text-xs text-gray-400">마지막 스냅샷 적재: {lastCapturedAt}</p>
+            )}
+
+            {returnHistoryError && (
+              <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+                {returnHistoryError}
+              </div>
+            )}
+
+            {returnRows.length > 0 ? (
+              <div className="mt-4 overflow-hidden rounded-xl border border-gray-100">
+                <div className="max-h-56 overflow-y-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 text-xs font-semibold text-gray-400">
+                      <tr>
+                        <th className="px-4 py-3 text-left">기준일</th>
+                        <th className="px-4 py-3 text-right">일별 수익률</th>
+                        <th className="px-4 py-3 text-right">평가금액</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {[...returnRows].reverse().slice(0, 10).map((row) => (
+                        <tr key={row.tradeDate}>
+                          <td className="px-4 py-3 text-gray-600">{row.tradeDate}</td>
+                          <td className={`px-4 py-3 text-right font-semibold ${
+                            Number(row.returnPct) >= 0 ? 'text-emerald-600' : 'text-red-500'
+                          }`}>
+                            {Number.isFinite(Number(row.returnPct))
+                              ? `${Number(row.returnPct) >= 0 ? '+' : ''}${fmtPct(Number(row.returnPct))}`
+                              : '-'}
+                          </td>
+                          <td className="px-4 py-3 text-right font-semibold text-gray-700">
+                            {fmtKRW(row.portfolioValue)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-4 rounded-xl border-2 border-dashed border-gray-200 bg-gray-50 p-6 text-center">
+                <p className="text-3xl mb-2">🕒</p>
+                <p className="text-sm font-semibold text-gray-500">아직 적재된 일별 수익률이 없습니다</p>
+                <p className="mt-1 text-xs text-gray-400">
+                  Cron이 실행되면 날짜별 평가금액과 수익률이 자동으로 쌓입니다.
+                </p>
+              </div>
+            )}
           </div>
 
           {varResult ? (
@@ -873,9 +923,9 @@ export default function PortfolioRisk({
               {returnsPct.length === 0 ? (
                 <>
                   <p className="text-3xl mb-2">📋</p>
-                  <p className="font-semibold text-gray-500 text-sm mb-1">수익률 데이터가 없습니다</p>
+                  <p className="font-semibold text-gray-500 text-sm mb-1">수익률 기록이 아직 없습니다</p>
                   <p className="text-xs text-gray-400">
-                    위의 <span className="font-semibold text-midblue">예시 데이터 생성</span> 버튼을 눌러보세요
+                    일일 스냅샷이 누적되면 자동으로 VaR 계산에 사용됩니다
                   </p>
                 </>
               ) : holdingsWithWeight.length === 0 ? (
@@ -890,7 +940,7 @@ export default function PortfolioRisk({
                   <p className="font-semibold text-gray-500 text-sm mb-1">
                     데이터 {returnsPct.length}개 — 최소 20개 필요
                   </p>
-                  <p className="text-xs text-gray-400">수익률을 더 입력하거나 예시 데이터를 생성하세요</p>
+                  <p className="text-xs text-gray-400">일일 스냅샷이 더 누적되면 VaR를 계산할 수 있습니다</p>
                 </>
               )}
             </div>
