@@ -328,8 +328,10 @@ export default function PortfolioRisk({
 }) {
   const [refreshing, setRefreshing] = useState(false)
   const [refreshMsg, setRefreshMsg] = useState('')
+  const [refreshResults, setRefreshResults] = useState({})
   const [lookupState, setLookupState] = useState({})
   const lookupRequestsRef = useRef({})
+  const refreshMessageTimerRef = useRef(null)
 
   const totalValue = useMemo(
     () => holdings.reduce((sum, holding) => sum + holding.qty * holding.currentPrice, 0),
@@ -466,6 +468,12 @@ export default function PortfolioRisk({
     nextHoldingId = Math.max(nextHoldingId, maxId + 1)
   }, [holdings])
 
+  useEffect(() => () => {
+    if (refreshMessageTimerRef.current) {
+      clearTimeout(refreshMessageTimerRef.current)
+    }
+  }, [])
+
   const updateHolding = (id, field, value) => {
     setHoldings((prev) => prev.map((holding) => (
       holding.id === id ? { ...holding, [field]: value } : holding
@@ -482,6 +490,15 @@ export default function PortfolioRisk({
   const removeRow = (id) => {
     setHoldings((prev) => prev.filter((holding) => holding.id !== id))
     setLookupState((prev) => {
+      if (!prev[id]) {
+        return prev
+      }
+
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
+    setRefreshResults((prev) => {
       if (!prev[id]) {
         return prev
       }
@@ -608,14 +625,34 @@ export default function PortfolioRisk({
   const handleRefreshPrices = async () => {
     setRefreshing(true)
     setRefreshMsg('')
+    if (refreshMessageTimerRef.current) {
+      clearTimeout(refreshMessageTimerRef.current)
+    }
 
     try {
       const updated = []
       const failedTickers = []
       const pricedHoldings = holdings.filter((holding) => holding.ticker)
+      const nextResults = holdings.reduce((acc, holding) => {
+        if (holding.ticker) {
+          acc[holding.id] = {
+            status: 'pending',
+            message: '현재가 조회 중',
+            ticker: holding.ticker,
+          }
+        }
+        return acc
+      }, {})
 
       if (pricedHoldings.length > 0) {
         setRefreshMsg(`시세 ${pricedHoldings.length}개 조회 중`)
+      } else {
+        setRefreshMsg('조회할 종목코드가 없습니다')
+      }
+      setRefreshResults(nextResults)
+
+      if (pricedHoldings.length === 0) {
+        return
       }
 
       for (const holding of holdings) {
@@ -626,14 +663,31 @@ export default function PortfolioRisk({
 
         try {
           const data = await fetchPriceWithRetry(holding.ticker)
+          const currentPrice = Number(data.price)
           updated.push({
             ...holding,
             name: data.name || holding.name,
-            currentPrice: Number(data.price),
+            currentPrice,
           })
-        } catch {
+          setRefreshResults((prev) => ({
+            ...prev,
+            [holding.id]: {
+              status: 'success',
+              message: `현재가 ${fmtKRW(currentPrice)} 반영`,
+              ticker: holding.ticker,
+            },
+          }))
+        } catch (error) {
           failedTickers.push(holding.ticker)
           updated.push(holding)
+          setRefreshResults((prev) => ({
+            ...prev,
+            [holding.id]: {
+              status: 'error',
+              message: error.message || '현재가 조회 실패. 기존 가격을 유지했습니다.',
+              ticker: holding.ticker,
+            },
+          }))
         }
       }
 
@@ -647,7 +701,7 @@ export default function PortfolioRisk({
       setRefreshMsg('업데이트 실패')
     } finally {
       setRefreshing(false)
-      setTimeout(() => setRefreshMsg(''), 5000)
+      refreshMessageTimerRef.current = setTimeout(() => setRefreshMsg(''), 5000)
     }
   }
 
@@ -809,7 +863,10 @@ export default function PortfolioRisk({
                 </tr>
               </thead>
                 <tbody className="divide-y divide-gray-50">
-                  {holdingsWithWeight.length > 0 ? holdingsWithWeight.map((holding) => (
+                  {holdingsWithWeight.length > 0 ? holdingsWithWeight.map((holding) => {
+                    const refreshState = refreshResults[holding.id]
+
+                    return (
                     <tr key={holding.id}>
                       <td className="py-2 pr-2">
                         <div className="space-y-1">
@@ -845,6 +902,15 @@ export default function PortfolioRisk({
                             onChange={(event) => {
                               updateHolding(holding.id, 'ticker', event.target.value.replace(/\D/g, ''))
                               setLookupStatus(holding.id, { message: '', tone: '', lastKey: '' })
+                              setRefreshResults((prev) => {
+                                if (!prev[holding.id]) {
+                                  return prev
+                                }
+
+                                const next = { ...prev }
+                                delete next[holding.id]
+                                return next
+                              })
                             }}
                             onBlur={(event) => lookupHolding(holding.id, 'ticker', event.target.value)}
                             onKeyDown={(event) => handleLookupKeyDown(event, holding, 'ticker')}
@@ -868,13 +934,29 @@ export default function PortfolioRisk({
                         />
                       </td>
                       <td className="py-2 px-2">
-                        <FormattedInput
-                          className={`${inputCls} text-right bg-gray-50 cursor-default select-none text-gray-500`}
-                          value={holding.currentPrice}
-                          min={0}
-                          onChange={(value) => updateHolding(holding.id, 'currentPrice', value)}
-                          readOnly
-                        />
+                        <div className="space-y-1">
+                          <FormattedInput
+                            className={`${inputCls} text-right bg-gray-50 cursor-default select-none text-gray-500`}
+                            value={holding.currentPrice}
+                            min={0}
+                            onChange={(value) => updateHolding(holding.id, 'currentPrice', value)}
+                            readOnly
+                          />
+                          {refreshState?.message && (
+                            <div className={`text-[11px] leading-snug ${
+                              refreshState.status === 'success'
+                                ? 'text-emerald-600'
+                                : refreshState.status === 'error'
+                                  ? 'text-red-500'
+                                  : 'text-gray-400'
+                            }`}>
+                              {refreshState.status === 'pending' && <Spinner size="xs" label="" />}
+                              <span className={refreshState.status === 'pending' ? 'ml-1' : ''}>
+                                {refreshState.message}
+                              </span>
+                            </div>
+                          )}
+                        </div>
                       </td>
                       <td className={`py-2 px-2 text-right font-semibold ${holding.returnPct >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
                         {holding.avgPrice > 0
@@ -894,7 +976,8 @@ export default function PortfolioRisk({
                         </button>
                       </td>
                     </tr>
-                  )) : (
+                    )
+                  }) : (
                     <tr>
                       <td colSpan={8} className="py-10 text-center">
                         <div className="space-y-2">

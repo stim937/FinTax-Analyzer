@@ -738,7 +738,15 @@ export default function App() {
   }, [])
 
   const handleSignOut = useCallback(async () => {
-    await supabase.auth.signOut()
+    try {
+      const { error } = await supabase.auth.signOut()
+      if (error) {
+        console.warn('[Auth] 로그아웃 요청 실패:', error.message)
+      }
+    } catch (error) {
+      console.warn('[Auth] 로그아웃 요청 중 오류가 발생했습니다.', error)
+    }
+
     setTransactions([])
     setTaxResults([])
     setCalcHistory([])
