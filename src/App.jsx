@@ -752,10 +752,19 @@ export default function App() {
         <header className="bg-navy shadow-md">
           <div className="max-w-screen-xl mx-auto px-6 py-4 flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <span className="text-2xl">📈</span>
-              <h1 className="text-white text-2xl font-extrabold tracking-tight">
-                FinTax Analyzer
-              </h1>
+              <img
+                src="/fintax-icon.png"
+                alt=""
+                className="h-10 w-10 rounded-md bg-white/95 object-cover p-0.5 shadow-sm"
+              />
+              <div className="flex flex-col leading-none">
+                <div className="text-white text-[2rem] font-black tracking-[-0.04em]">
+                  fintax
+                </div>
+                <div className="text-blue-300 text-[0.65rem] font-semibold tracking-[0.38em] pl-1 mt-0.5">
+                  ANALYZER
+                </div>
+              </div>
               <span className="hidden sm:inline text-blue-300 text-xs font-medium border border-blue-400 rounded px-1.5 py-0.5">
                 Beta
               </span>

@@ -39,11 +39,24 @@ export default function LoginForm() {
       <div className="w-full max-w-sm">
         {/* 로고 */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center gap-2 mb-2">
-            <span className="text-3xl">📈</span>
-            <h1 className="text-2xl font-extrabold text-navy tracking-tight">FinTax Analyzer</h1>
+          <div className="inline-flex items-center gap-2 leading-none">
+            <img
+              src="/fintax-icon.png"
+              alt=""
+              className="h-20 w-20 object-cover"
+            />
+            <div className="text-left -ml-1">
+              <div className="text-[4.25rem] font-black tracking-[-0.02em] text-[#132c7a]">
+                fintax
+              </div>
+              <div className="text-[1.1rem] font-semibold tracking-[0.32em] text-[#1f67e0] text-center mt-1">
+                ANALYZER
+              </div>
+            </div>
           </div>
-          <p className="text-sm text-gray-500">금융자산 평가 &amp; 세무자동화</p>
+          <div className="mt-2">
+            <p className="text-sm text-gray-500">금융자산 평가 &amp; 세무자동화</p>
+          </div>
         </div>
 
         {/* 카드 */}
