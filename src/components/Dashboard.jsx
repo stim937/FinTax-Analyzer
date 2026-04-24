@@ -1,3 +1,5 @@
+import Spinner from './ui/Spinner'
+
 const DEFAULT_SUMMARY = [
   { icon: '📊', label: '총 평가자산',    valueKey: 'totalAssets',  fallback: '₩ 0' },
   { icon: '⚠️', label: '포트폴리오 VaR', valueKey: 'portfolioVaR', fallback: '0.00%' },
@@ -22,7 +24,7 @@ function TypeBadge({ type }) {
 
 const QUICK_ACTIONS = ['채권 계산', '주식 평가', '세무 검증']
 
-function SummaryCard({ icon, label, value }) {
+function SummaryCard({ icon, label, value, loading }) {
   return (
     <div className="bg-white rounded-xl shadow-sm overflow-hidden flex-1 min-w-0">
       <div className="h-1 bg-navy" />
@@ -31,13 +33,19 @@ function SummaryCard({ icon, label, value }) {
           <span className="text-sm text-gray-500 font-medium">{label}</span>
           <span className="text-2xl leading-none">{icon}</span>
         </div>
-        <p className="text-2xl font-bold text-gray-800 truncate">{value}</p>
+        {loading ? (
+          <div className="flex h-9 items-center">
+            <Spinner size="sm" label="" />
+          </div>
+        ) : (
+          <p className="text-2xl font-bold text-gray-800 truncate">{value}</p>
+        )}
       </div>
     </div>
   )
 }
 
-export default function Dashboard({ summaryData = {}, onQuickAction, history = [] }) {
+export default function Dashboard({ summaryData = {}, summaryLoading = false, onQuickAction, history = [] }) {
   return (
     <div className="space-y-6">
       {/* 요약 카드 */}
@@ -48,6 +56,7 @@ export default function Dashboard({ summaryData = {}, onQuickAction, history = [
             icon={icon}
             label={label}
             value={summaryData[valueKey] ?? fallback}
+            loading={summaryLoading && valueKey !== 'taxReserve'}
           />
         ))}
       </div>
