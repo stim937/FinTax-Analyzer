@@ -136,7 +136,7 @@ const fmtPct = (value) => (
 )
 
 const inputCls =
-  'border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-midblue focus:border-transparent transition w-full'
+  'w-full rounded-lg border border-gray-200 px-2 py-1.5 text-sm transition focus:outline-none focus:ring-2 focus:ring-inset focus:ring-midblue focus:border-transparent'
 
 function ReturnHistogram({ returnsPct, var95pct, var99pct }) {
   const hist = useMemo(() => buildHistogram(returnsPct), [returnsPct])
