@@ -44,6 +44,9 @@ function buildDefaultPortfolioDraft() {
 }
 
 const PORTFOLIO_TABLE = 'portfolio'
+const MIN_VAR_OBSERVATIONS = 20
+const DASHBOARD_VAR_LOOKBACK_DAYS = 120
+const DASHBOARD_HISTORY_FETCH_CONCURRENCY = 2
 
 function toNumber(value, fallback = 0) {
   const parsed = Number(value)
@@ -188,6 +191,86 @@ function formatDateTime(value) {
   })
 }
 
+function calcVaR(returns, portfolioValue) {
+  const sorted = [...returns].sort((a, b) => a - b)
+  const var95 = Math.abs(sorted[Math.floor(sorted.length * 0.05)])
+  const var99 = Math.abs(sorted[Math.floor(sorted.length * 0.01)])
+  return {
+    var95: (var95 / 100) * portfolioValue,
+    var99: (var99 / 100) * portfolioValue,
+    var95pct: var95,
+    var99pct: var99,
+  }
+}
+
+async function fetchHistoryRows(ticker, period = DASHBOARD_VAR_LOOKBACK_DAYS) {
+  const response = await fetch(`/api/market/history?ticker=${encodeURIComponent(ticker)}&period=${period}`)
+  const data = await response.json()
+
+  if (!response.ok || !Array.isArray(data?.rows)) {
+    const reason = data?.detail || data?.error || '일봉 조회 실패'
+    throw new Error(`${ticker} 일봉 조회 실패 (${response.status}): ${reason}`)
+  }
+
+  return data.rows
+}
+
+function buildRiskPositions(holdings, totalValue) {
+  const byTicker = new Map()
+
+  for (const holding of holdings) {
+    const ticker = String(holding?.ticker ?? '').trim()
+    const value = Math.max(0, Number(holding?.qty) || 0) * Math.max(0, Number(holding?.currentPrice) || 0)
+
+    if (!ticker || value <= 0) {
+      continue
+    }
+
+    const current = byTicker.get(ticker) ?? { ticker, value: 0 }
+    current.value += value
+    byTicker.set(ticker, current)
+  }
+
+  return Array.from(byTicker.values()).map((position) => ({
+    ...position,
+    weight: totalValue > 0 ? (position.value / totalValue) * 100 : 0,
+  }))
+}
+
+function buildWeightedReturns(positions, historyResults, totalValue) {
+  const successful = positions
+    .map((position) => ({
+      ...position,
+      rows: historyResults[position.ticker] ?? [],
+    }))
+    .filter((position) => position.rows.length > 0)
+
+  const coveredValue = successful.reduce((sum, position) => sum + position.value, 0)
+  if (successful.length === 0 || coveredValue <= 0 || totalValue <= 0) {
+    return []
+  }
+
+  const commonDates = successful
+    .map((position) => new Set(position.rows.map((row) => row.tradeDate)))
+    .reduce((intersection, dateSet) => (
+      new Set([...intersection].filter((date) => dateSet.has(date)))
+    ))
+
+  const rowMaps = successful.map((position) => ({
+    ...position,
+    normalizedWeight: position.value / coveredValue,
+    byDate: new Map(position.rows.map((row) => [row.tradeDate, row])),
+  }))
+
+  return [...commonDates]
+    .sort((a, b) => a.localeCompare(b))
+    .map((tradeDate) => rowMaps.reduce((sum, position) => (
+      sum + position.normalizedWeight * Number(position.byDate.get(tradeDate)?.returnPct ?? 0)
+    ), 0))
+    .filter((value) => Number.isFinite(value))
+    .slice(-DASHBOARD_VAR_LOOKBACK_DAYS)
+}
+
 function SubTabs({ tabs, active, onChange, badge }) {
   return (
     <div className="flex items-center gap-2 mb-5">
@@ -225,6 +308,7 @@ export default function App() {
   const [taxHeader, setTaxHeader] = useState({ company: '', taxYear: 2025 })
   const [portfolioHoldings, setPortfolioHoldings] = useState(initialPortfolioDraft.holdings)
   const [portfolioRiskPct, setPortfolioRiskPct] = useState(0)
+  const [portfolioRiskLoading, setPortfolioRiskLoading] = useState(false)
   const [stock, setStock] = useState(DEFAULT_STOCK)
   const [bond, setBond] = useState(DEFAULT_BOND)
   const [calcHistory, setCalcHistory] = useState([])
@@ -446,6 +530,67 @@ export default function App() {
     [portfolioHoldings],
   )
 
+  useEffect(() => {
+    let cancelled = false
+    const positions = buildRiskPositions(portfolioHoldings, portfolioValue)
+
+    if (positions.length === 0 || portfolioValue <= 0) {
+      Promise.resolve().then(() => {
+        if (!cancelled) {
+          setPortfolioRiskPct(0)
+          setPortfolioRiskLoading(false)
+        }
+      })
+      return () => {
+        cancelled = true
+      }
+    }
+
+    async function calculateDashboardVaR() {
+      setPortfolioRiskLoading(true)
+      const historyResults = {}
+
+      async function worker(startIndex) {
+        for (let index = startIndex; index < positions.length; index += DASHBOARD_HISTORY_FETCH_CONCURRENCY) {
+          const position = positions[index]
+
+          try {
+            historyResults[position.ticker] = await fetchHistoryRows(position.ticker)
+          } catch {
+            historyResults[position.ticker] = []
+          }
+        }
+      }
+
+      await Promise.all(
+        Array.from(
+          { length: Math.min(DASHBOARD_HISTORY_FETCH_CONCURRENCY, positions.length || 1) },
+          (_, index) => worker(index),
+        ),
+      )
+
+      if (cancelled) {
+        return
+      }
+
+      const returnsPct = buildWeightedReturns(positions, historyResults, portfolioValue)
+      if (returnsPct.length < MIN_VAR_OBSERVATIONS) {
+        setPortfolioRiskPct(0)
+        setPortfolioRiskLoading(false)
+        return
+      }
+
+      setPortfolioRiskPct(calcVaR(returnsPct, portfolioValue).var95pct)
+      setPortfolioRiskLoading(false)
+    }
+
+    void calculateDashboardVaR()
+
+    return () => {
+      cancelled = true
+    }
+  }, [portfolioHoldings, portfolioValue])
+
   const summaryData = useMemo(() => ({
     totalAssets: portfolioValue > 0
       ? `₩ ${portfolioValue.toLocaleString('ko-KR')}`
@@ -465,6 +610,12 @@ export default function App() {
       || !portfolioSync.hasCheckedRemote
     ),
   )
+
+  const summaryLoadingState = useMemo(() => ({
+    totalAssets: summaryLoading,
+    portfolioVaR: summaryLoading || portfolioRiskLoading,
+    taxReserve: false,
+  }), [portfolioRiskLoading, summaryLoading])
 
   const handlePortfolioSave = useCallback(async () => {
     if (!supabase || !user?.id) {
@@ -536,6 +687,7 @@ export default function App() {
 
   const handlePortfolioUpdate = useCallback(({ totalValue, var95pct }) => {
     setPortfolioRiskPct(var95pct)
+    setPortfolioRiskLoading(false)
     if (totalValue > 0) {
       addHistory({
         name: '포트폴리오',
@@ -705,7 +857,7 @@ export default function App() {
               {activeFinanceTab === 'dashboard' && (
                 <Dashboard
                   summaryData={summaryData}
-                  summaryLoading={summaryLoading}
+                  summaryLoading={summaryLoadingState}
                   onQuickAction={handleQuickAction}
                   history={calcHistory}
                 />
