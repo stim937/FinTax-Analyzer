@@ -93,18 +93,27 @@ function serializePortfolioSnapshot(holdings) {
   return JSON.stringify(buildPortfolioSnapshot(holdings))
 }
 
+const PRICE_RETRY_DELAYS = [300, 700, 1500, 3000]
+
+function wait(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms)
+  })
+}
+
 async function fetchLivePrice(ticker) {
   const response = await fetch(`/api/market/stock?ticker=${encodeURIComponent(ticker)}`)
   const data = await response.json()
 
   if (!response.ok || !Number(data?.price)) {
-    throw new Error(data?.error || '현재가 조회 실패')
+    const reason = data?.detail || data?.error || '현재가 조회 실패'
+    throw new Error(`${ticker} 현재가 조회 실패 (${response.status}): ${reason}`)
   }
 
   return data
 }
 
-async function fetchLivePriceWithRetry(ticker, attempts = 3) {
+async function fetchLivePriceWithRetry(ticker, attempts = 5) {
   let lastError = null
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -114,9 +123,7 @@ async function fetchLivePriceWithRetry(ticker, attempts = 3) {
       lastError = error
 
       if (attempt < attempts - 1) {
-        await new Promise((resolve) => {
-          setTimeout(resolve, 180 * (attempt + 1))
-        })
+        await wait(PRICE_RETRY_DELAYS[attempt] ?? PRICE_RETRY_DELAYS.at(-1))
       }
     }
   }
@@ -127,6 +134,7 @@ async function fetchLivePriceWithRetry(ticker, attempts = 3) {
 async function attachLivePrices(holdings) {
   const normalized = normalizeHoldings(holdings)
   const priced = [...normalized]
+  const failedTickers = []
   const concurrency = 2
 
   async function worker(startIndex) {
@@ -146,7 +154,8 @@ async function attachLivePrices(holdings) {
           currentPrice: Number(data.price),
         }
       } catch {
-        priced[index] = { ...holding, currentPrice: 0 }
+        failedTickers.push(holding.ticker)
+        priced[index] = holding
       }
     }
   }
@@ -155,7 +164,10 @@ async function attachLivePrices(holdings) {
     Array.from({ length: Math.min(concurrency, normalized.length || 1) }, (_, index) => worker(index)),
   )
 
-  return priced
+  return {
+    holdings: priced,
+    failedTickers,
+  }
 }
 
 function formatDateTime(value) {
@@ -334,7 +346,10 @@ export default function App() {
       return
     }
 
-    const restoredHoldings = await attachLivePrices(data.holdings)
+    const {
+      holdings: restoredHoldings,
+      failedTickers,
+    } = await attachLivePrices(data.holdings)
     const savedSnapshot = serializePortfolioSnapshot(data.holdings)
     setPortfolioHoldings(restoredHoldings)
 
@@ -349,6 +364,8 @@ export default function App() {
       restoreError: '',
       notice: restoredHoldings.length === 0
         ? '저장된 포트폴리오는 비어 있습니다. 종목을 추가한 뒤 다시 저장해 주세요.'
+        : failedTickers.length > 0
+          ? `${failedTickers.join(', ')} 현재가 조회에 실패했습니다. 기존 가격을 유지했습니다.`
         : '',
       lastSavedAt: data.updated_at ?? '',
       hasRemoteSnapshot: true,

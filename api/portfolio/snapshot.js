@@ -7,6 +7,7 @@ import path from 'node:path'
 
 const KIS_BASE = 'https://openapi.koreainvestment.com:9443'
 const TOKEN_CACHE_PATH = path.join(os.tmpdir(), 'fintax-kis-token.json')
+const PRICE_RETRY_DELAYS = [300, 700, 1500, 3000]
 let cachedAccessToken = ''
 let cachedAccessTokenExpiresAt = 0
 
@@ -28,7 +29,9 @@ async function getKisAccessToken() {
       cachedAccessTokenExpiresAt = Number(saved.expiresAt)
       return cachedAccessToken
     }
-  } catch {}
+  } catch {
+    // 토큰 파일 캐시는 보조 경로라 실패해도 새 토큰 발급으로 진행합니다.
+  }
 
   const response = await fetch(`${KIS_BASE}/oauth2/tokenP`, {
     method: 'POST',
@@ -60,7 +63,9 @@ async function getKisAccessToken() {
       }),
       'utf8',
     )
-  } catch {}
+  } catch {
+    // 서버리스 임시 저장소 쓰기 실패는 다음 호출에서 다시 토큰을 발급받으면 됩니다.
+  }
   return cachedAccessToken
 }
 
@@ -84,7 +89,7 @@ async function getKisStockQuote(ticker, accessToken) {
   const output = data?.output
 
   if (!response.ok || !output?.stck_prpr) {
-    throw new Error(data?.msg1 || 'KIS 시세 응답이 올바르지 않습니다.')
+    throw new Error(`${ticker} KIS 시세 조회 실패 (${response.status}): ${data?.msg1 || 'KIS 시세 응답이 올바르지 않습니다.'}`)
   }
 
   return {
@@ -92,6 +97,61 @@ async function getKisStockQuote(ticker, accessToken) {
     price: Number(output.stck_prpr),
     name: output.hts_kor_isnm,
   }
+}
+
+function wait(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms)
+  })
+}
+
+async function getKisStockQuoteWithRetry(ticker, accessToken, attempts = 5) {
+  let lastError = null
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await getKisStockQuote(ticker, accessToken)
+    } catch (error) {
+      lastError = error
+
+      if (attempt < attempts - 1) {
+        await wait(PRICE_RETRY_DELAYS[attempt] ?? PRICE_RETRY_DELAYS.at(-1))
+      }
+    }
+  }
+
+  throw lastError ?? new Error(`${ticker} KIS 시세 조회 실패`)
+}
+
+async function priceHoldingsWithLimit(holdings, accessToken, concurrency = 2) {
+  const priced = [...holdings]
+
+  async function worker(startIndex) {
+    for (let index = startIndex; index < holdings.length; index += concurrency) {
+      const holding = holdings[index]
+
+      try {
+        const quote = await getKisStockQuoteWithRetry(holding.ticker, accessToken)
+        priced[index] = {
+          ...holding,
+          currentPrice: quote.price,
+          priced: true,
+        }
+      } catch (error) {
+        priced[index] = {
+          ...holding,
+          priced: false,
+          error: error.message,
+        }
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, holdings.length || 1) }, (_, index) => worker(index)),
+  )
+
+  return priced
 }
 
 function getKstDateParts(date = new Date()) {
@@ -212,25 +272,7 @@ export default async function handler(req, res) {
         continue
       }
 
-      const priced = await Promise.all(
-        holdings.map(async (holding) => {
-          try {
-            const quote = await getKisStockQuote(holding.ticker, accessToken)
-            return {
-              ...holding,
-              currentPrice: quote.price,
-              priced: true,
-            }
-          } catch (error) {
-            return {
-              ...holding,
-              currentPrice: 0,
-              priced: false,
-              error: error.message,
-            }
-          }
-        }),
-      )
+      const priced = await priceHoldingsWithLimit(holdings, accessToken)
 
       const pricedHoldings = priced.filter((holding) => holding.priced && holding.currentPrice > 0)
       const failedTickers = priced.filter((holding) => !holding.priced).map((holding) => holding.ticker)
