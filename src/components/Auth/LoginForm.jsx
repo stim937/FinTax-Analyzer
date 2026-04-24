@@ -8,6 +8,7 @@ export default function LoginForm() {
   const [error,    setError]    = useState('')
   const [loading,  setLoading]  = useState(false)
   const [message,  setMessage]  = useState('')
+  const [capsLockOn, setCapsLockOn] = useState(false)
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -33,6 +34,10 @@ export default function LoginForm() {
 
   const inputCls =
     'w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-navy focus:border-transparent transition'
+
+  const handlePasswordKeyEvent = (event) => {
+    setCapsLockOn(Boolean(event.getModifierState?.('CapsLock')))
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
@@ -87,11 +92,23 @@ export default function LoginForm() {
                 type="password"
                 className={inputCls}
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={(e) => {
+                  setPassword(e.target.value)
+                  setCapsLockOn(Boolean(e.getModifierState?.('CapsLock')))
+                }}
+                onKeyDown={handlePasswordKeyEvent}
+                onKeyUp={handlePasswordKeyEvent}
+                onFocus={handlePasswordKeyEvent}
+                onBlur={() => setCapsLockOn(false)}
                 placeholder={mode === 'signup' ? '8자 이상 입력' : '비밀번호 입력'}
                 minLength={mode === 'signup' ? 8 : undefined}
                 required
               />
+              {capsLockOn && (
+                <p className="mt-1.5 text-xs font-medium text-amber-600">
+                  Caps Lock이 켜져 있습니다.
+                </p>
+              )}
             </div>
 
             {error && (
