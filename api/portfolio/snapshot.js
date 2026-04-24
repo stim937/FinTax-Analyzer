@@ -183,6 +183,18 @@ function normalizeHolding(holding, index) {
   }
 }
 
+function formatCompositionQty(qty) {
+  const value = Number(qty) || 0
+  return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(8)))
+}
+
+function buildCompositionKey(holdings) {
+  return holdings
+    .map((holding) => `${holding.ticker}:${formatCompositionQty(holding.qty)}`)
+    .sort()
+    .join('|')
+}
+
 function createServiceSupabase() {
   const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -283,10 +295,11 @@ export default async function handler(req, res) {
       }
 
       const portfolioValue = pricedHoldings.reduce((sum, holding) => sum + holding.qty * holding.currentPrice, 0)
+      const compositionKey = buildCompositionKey(pricedHoldings)
 
       const { data: previous, error: previousError } = await supabase
         .from('portfolio_returns')
-        .select('trade_date, portfolio_value')
+        .select('trade_date, portfolio_value, meta')
         .eq('user_id', row.user_id)
         .lt('trade_date', tradeDate)
         .order('trade_date', { ascending: false })
@@ -298,7 +311,13 @@ export default async function handler(req, res) {
       }
 
       const previousValue = Number(previous?.portfolio_value) || 0
-      const returnPct = previousValue > 0
+      const previousCompositionKey = typeof previous?.meta?.composition_key === 'string'
+        ? previous.meta.composition_key
+        : ''
+      const returnStatus = previousValue > 0 && previousCompositionKey === compositionKey
+        ? 'clean'
+        : 'composition_changed'
+      const returnPct = returnStatus === 'clean'
         ? Number((((portfolioValue - previousValue) / previousValue) * 100).toFixed(6))
         : null
 
@@ -310,6 +329,8 @@ export default async function handler(req, res) {
         meta: {
           holdings_count: pricedHoldings.length,
           tickers: pricedHoldings.map((holding) => holding.ticker),
+          composition_key: compositionKey,
+          return_status: returnStatus,
           pricing_status: failedTickers.length > 0 ? 'partial' : 'complete',
           failed_tickers: failedTickers,
           snapshot_source: 'vercel-cron',
@@ -330,6 +351,7 @@ export default async function handler(req, res) {
         tradeDate,
         portfolioValue: payload.portfolio_value,
         returnPct,
+        returnStatus,
         pricingStatus: payload.meta.pricing_status,
       })
     }

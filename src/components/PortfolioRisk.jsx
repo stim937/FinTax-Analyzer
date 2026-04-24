@@ -67,37 +67,6 @@ function calcVaR(returns, portfolioValue) {
 const BIN_WIDTH = 0.5
 const MIN_VAR_OBSERVATIONS = 20
 
-function hashString(value) {
-  let hash = 2166136261
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index)
-    hash = Math.imul(hash, 16777619)
-  }
-  return hash >>> 0
-}
-
-function createSeededRandom(seed) {
-  let state = seed || 1
-  return () => {
-    state = (state * 1664525 + 1013904223) >>> 0
-    return state / 4294967296
-  }
-}
-
-function generateBackfillReturns(seedSource, count) {
-  if (count <= 0) {
-    return []
-  }
-
-  const rand = createSeededRandom(hashString(seedSource))
-  return Array.from({ length: count }, () => {
-    const u1 = Math.max(rand(), 1e-9)
-    const u2 = Math.max(rand(), 1e-9)
-    const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2)
-    return Number((z * 1.15).toFixed(4))
-  })
-}
-
 function buildHistogram(returnsPct) {
   if (!returnsPct.length) {
     return null
@@ -140,6 +109,8 @@ const inputCls =
 
 const PRICE_RETRY_DELAYS = [300, 700, 1500, 3000]
 const PRICE_REFRESH_CONCURRENCY = 2
+const HISTORY_LOOKBACK_DAYS = 120
+const HISTORY_FETCH_CONCURRENCY = 2
 
 function wait(ms) {
   return new Promise((resolve) => {
@@ -171,6 +142,32 @@ async function fetchPriceWithRetry(ticker, attempts = 5) {
   }
 
   throw lastError ?? new Error(`${ticker} 현재가 조회 실패`)
+}
+
+async function fetchHistoryWithRetry(ticker, period = HISTORY_LOOKBACK_DAYS, attempts = 4) {
+  let lastError = null
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const response = await fetch(`/api/market/history?ticker=${encodeURIComponent(ticker)}&period=${period}`)
+      const data = await response.json()
+
+      if (!response.ok || !Array.isArray(data?.rows)) {
+        const reason = data?.detail || data?.error || '일봉 조회 실패'
+        throw new Error(`${ticker} 일봉 조회 실패 (${response.status}): ${reason}`)
+      }
+
+      return data.rows
+    } catch (error) {
+      lastError = error
+
+      if (attempt < attempts - 1) {
+        await wait(PRICE_RETRY_DELAYS[attempt] ?? PRICE_RETRY_DELAYS.at(-1))
+      }
+    }
+  }
+
+  throw lastError ?? new Error(`${ticker} 일봉 조회 실패`)
 }
 
 function ReturnHistogram({ returnsPct, var95pct, var99pct }) {
@@ -220,15 +217,15 @@ function ReturnHistogram({ returnsPct, var95pct, var99pct }) {
       legend: { display: false },
       title: {
         display: true,
-        text: '일별 수익률 분포 히스토그램',
+        text: '현재 보유 기준 일별 수익률 분포',
         color: '#374151',
         font: { size: 13, weight: '600' },
         padding: { bottom: 12 },
       },
       tooltip: {
         callbacks: {
-          title: ([item]) => `수익률 구간: ${item.label}%`,
-          label: (item) => ` 빈도: ${item.raw}일`,
+          title: ([item]) => `현재비중 수익률 구간: ${item.label}%`,
+          label: (item) => ` 관측 빈도: ${item.raw}일`,
         },
       },
       annotation: {
@@ -242,7 +239,7 @@ function ReturnHistogram({ returnsPct, var95pct, var99pct }) {
             borderDash: [5, 4],
             label: {
               display: true,
-              content: `95% VaR  −${fmtPct(var95pct)}`,
+              content: `95% 손실 기준  −${fmtPct(var95pct)}`,
               backgroundColor: '#F97316',
               color: '#fff',
               font: { size: 10, weight: '600' },
@@ -261,7 +258,7 @@ function ReturnHistogram({ returnsPct, var95pct, var99pct }) {
             borderDash: [5, 4],
             label: {
               display: true,
-              content: `99% VaR  −${fmtPct(var99pct)}`,
+              content: `99% 손실 기준  −${fmtPct(var99pct)}`,
               backgroundColor: '#EF4444',
               color: '#fff',
               font: { size: 10, weight: '600' },
@@ -288,7 +285,7 @@ function ReturnHistogram({ returnsPct, var95pct, var99pct }) {
         },
         title: {
           display: true,
-          text: '수익률 (%)',
+          text: '현재 보유 비중 일별 수익률 (%)',
           color: '#6B7280',
           font: { size: 11 },
         },
@@ -298,7 +295,7 @@ function ReturnHistogram({ returnsPct, var95pct, var99pct }) {
         ticks: { color: '#9CA3AF', font: { size: 11 } },
         title: {
           display: true,
-          text: '빈도 (일)',
+          text: '관측 빈도 (일)',
           color: '#6B7280',
           font: { size: 11 },
         },
@@ -308,6 +305,12 @@ function ReturnHistogram({ returnsPct, var95pct, var99pct }) {
 
   return (
     <div className="bg-white rounded-xl shadow-sm p-6">
+      <div className="mb-3">
+        <h2 className="text-base font-semibold text-gray-700">손실 분포와 VaR 기준선</h2>
+        <p className="mt-1 text-xs text-gray-400">
+          현재 보유 비중으로 조합한 일별 수익률 분포에서 왼쪽 꼬리 손실 구간을 강조합니다.
+        </p>
+      </div>
       <div style={{ height: 320 }}>
         <Bar data={data} options={options} />
       </div>
@@ -323,17 +326,22 @@ export default function PortfolioRisk({
   onUpdate,
   holdings,
   setHoldings,
-  returnSeries,
   cloudState,
   cloudActions,
 }) {
   const [refreshing, setRefreshing] = useState(false)
   const [refreshMsg, setRefreshMsg] = useState('')
   const [refreshResults, setRefreshResults] = useState({})
+  const [historyState, setHistoryState] = useState({
+    loading: false,
+    results: {},
+    error: '',
+  })
   const [lookupState, setLookupState] = useState({})
   const lookupRequestsRef = useRef({})
   const refreshMessageTimerRef = useRef(null)
   const refreshResultTimersRef = useRef({})
+  const historyRequestRef = useRef(0)
 
   const totalValue = useMemo(
     () => holdings.reduce((sum, holding) => sum + holding.qty * holding.currentPrice, 0),
@@ -352,6 +360,32 @@ export default function PortfolioRisk({
     })),
     [holdings, totalValue],
   )
+
+  const riskPositions = useMemo(() => {
+    const byTicker = new Map()
+
+    for (const holding of holdingsWithWeight) {
+      if (!holding.ticker || holding.value <= 0) {
+        continue
+      }
+
+      const current = byTicker.get(holding.ticker) ?? {
+        ticker: holding.ticker,
+        name: holding.name || holding.ticker,
+        value: 0,
+      }
+      current.value += holding.value
+      if (!current.name && holding.name) {
+        current.name = holding.name
+      }
+      byTicker.set(holding.ticker, current)
+    }
+
+    return Array.from(byTicker.values()).map((position) => ({
+      ...position,
+      weight: totalValue > 0 ? (position.value / totalValue) * 100 : 0,
+    }))
+  }, [holdingsWithWeight, totalValue])
 
   const totalCost = useMemo(
     () => holdings.reduce((sum, holding) => sum + holding.qty * holding.avgPrice, 0),
@@ -421,38 +455,72 @@ export default function PortfolioRisk({
     }
   }, [holdings, lookupState])
 
-  const returnRows = useMemo(
-    () => (Array.isArray(returnSeries) ? returnSeries : []),
-    [returnSeries],
-  )
+  const varSource = useMemo(() => {
+    const successful = riskPositions
+      .map((position) => ({
+        ...position,
+        rows: historyState.results[position.ticker]?.rows ?? [],
+        status: historyState.results[position.ticker]?.status,
+        error: historyState.results[position.ticker]?.error,
+      }))
+      .filter((position) => position.status === 'success' && position.rows.length > 0)
 
-  const actualReturnsPct = useMemo(
-    () => returnRows
-      .map((row) => Number(row.returnPct))
-      .filter((value) => !Number.isNaN(value) && Number.isFinite(value)),
-    [returnRows],
-  )
+    const excluded = riskPositions
+      .filter((position) => !successful.some((item) => item.ticker === position.ticker))
+      .map((position) => ({
+        ...position,
+        error: historyState.results[position.ticker]?.error || '일봉 데이터 없음',
+      }))
 
-  const backfillSeed = useMemo(
-    () => JSON.stringify(
-      holdings.map(({ ticker, qty, avgPrice }) => ({
-        ticker,
-        qty,
-        avgPrice,
-      })),
-    ),
-    [holdings],
-  )
+    const coveredValue = successful.reduce((sum, position) => sum + position.value, 0)
 
-  const backfillReturnsPct = useMemo(
-    () => generateBackfillReturns(backfillSeed, Math.max(0, MIN_VAR_OBSERVATIONS - actualReturnsPct.length)),
-    [actualReturnsPct.length, backfillSeed],
-  )
+    if (successful.length === 0 || coveredValue <= 0) {
+      return {
+        rows: [],
+        returnsPct: [],
+        excluded,
+        coveragePct: 0,
+        observationCount: 0,
+      }
+    }
 
-  const returnsPct = useMemo(
-    () => [...backfillReturnsPct, ...actualReturnsPct],
-    [actualReturnsPct, backfillReturnsPct],
-  )
+    const commonDates = successful
+      .map((position) => new Set(position.rows.map((row) => row.tradeDate)))
+      .reduce((intersection, dateSet) => (
+        new Set([...intersection].filter((date) => dateSet.has(date)))
+      ))
+
+    const rowMaps = successful.map((position) => ({
+      ...position,
+      normalizedWeight: position.value / coveredValue,
+      byDate: new Map(position.rows.map((row) => [row.tradeDate, row])),
+    }))
+
+    const rows = [...commonDates]
+      .sort((a, b) => a.localeCompare(b))
+      .map((tradeDate) => {
+        const returnPct = rowMaps.reduce((sum, position) => (
+          sum + position.normalizedWeight * Number(position.byDate.get(tradeDate)?.returnPct ?? 0)
+        ), 0)
+
+        return {
+          tradeDate,
+          returnPct: Number(returnPct.toFixed(6)),
+        }
+      })
+      .filter((row) => Number.isFinite(row.returnPct))
+      .slice(-HISTORY_LOOKBACK_DAYS)
+
+    return {
+      rows,
+      returnsPct: rows.map((row) => row.returnPct),
+      excluded,
+      coveragePct: totalValue > 0 ? (coveredValue / totalValue) * 100 : 0,
+      observationCount: rows.length,
+    }
+  }, [historyState.results, riskPositions, totalValue])
+
+  const returnsPct = varSource.returnsPct
 
   const varResult = useMemo(() => {
     if (returnsPct.length < MIN_VAR_OBSERVATIONS || totalValue <= 0) {
@@ -464,6 +532,68 @@ export default function PortfolioRisk({
   useEffect(() => {
     onUpdate?.({ totalValue, var95pct: varResult?.var95pct ?? 0 })
   }, [onUpdate, totalValue, varResult])
+
+  useEffect(() => {
+    const requestId = historyRequestRef.current + 1
+    historyRequestRef.current = requestId
+
+    if (riskPositions.length === 0) {
+      setHistoryState({ loading: false, results: {}, error: '' })
+      return
+    }
+
+    setHistoryState((prev) => ({
+      ...prev,
+      loading: true,
+      error: '',
+    }))
+
+    const results = {}
+
+    async function worker(startIndex) {
+      for (let index = startIndex; index < riskPositions.length; index += HISTORY_FETCH_CONCURRENCY) {
+        const position = riskPositions[index]
+
+        try {
+          const rows = await fetchHistoryWithRetry(position.ticker)
+          results[position.ticker] = {
+            status: 'success',
+            rows,
+          }
+        } catch (error) {
+          results[position.ticker] = {
+            status: 'error',
+            rows: [],
+            error: error.message || '일봉 조회 실패',
+          }
+        }
+      }
+    }
+
+    Promise.all(
+      Array.from(
+        { length: Math.min(HISTORY_FETCH_CONCURRENCY, riskPositions.length || 1) },
+        (_, index) => worker(index),
+      ),
+    ).then(() => {
+      if (historyRequestRef.current !== requestId) {
+        return
+      }
+
+      const failedCount = Object.values(results).filter((item) => item.status === 'error').length
+      setHistoryState({
+        loading: false,
+        results,
+        error: failedCount > 0 ? `${failedCount}개 종목의 일봉 이력을 불러오지 못했습니다.` : '',
+      })
+    })
+
+    return () => {
+      if (historyRequestRef.current === requestId) {
+        historyRequestRef.current += 1
+      }
+    }
+  }, [riskPositions])
 
   useEffect(() => {
     const maxId = holdings.reduce((currentMax, holding) => Math.max(currentMax, Number(holding.id) || 0), 0)
@@ -747,9 +877,6 @@ export default function PortfolioRisk({
     hasRemoteSnapshot,
     hasCheckedRemote,
     hasPortfolioChanges,
-    returnHistoryLoading,
-    returnHistoryError,
-    lastCapturedAt,
   } = cloudState ?? {}
 
   const { onSave } = cloudActions ?? {}
@@ -1053,20 +1180,22 @@ export default function PortfolioRisk({
           <div className="bg-white rounded-xl shadow-sm p-6">
             <div className="flex items-center justify-between border-b border-gray-100 pb-3 mb-4">
               <div>
-                <h2 className="text-base font-semibold text-gray-700">일별 수익률 히스토리</h2>
-                <p className="text-xs text-gray-400 mt-0.5">장 마감 후 저장된 포트폴리오 평가금액 기준</p>
+                <h2 className="text-base font-semibold text-gray-700">VaR 산출 수익률</h2>
+                <p className="text-xs text-gray-400 mt-0.5">현재 보유 비중과 종목별 KIS 일봉 수익률 기준</p>
               </div>
-              {returnHistoryLoading && <Spinner size="xs" label="" />}
+              {historyState.loading && <Spinner size="xs" label="" />}
             </div>
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <div className="rounded-xl bg-slate-50 px-4 py-3">
-                <p className="text-xs font-semibold text-gray-400">최근 적재일</p>
-                <p className="mt-1 text-sm font-bold text-gray-700">{returnRows.at(-1)?.tradeDate || '-'}</p>
+                <p className="text-xs font-semibold text-gray-400">관측 기간</p>
+                <p className="mt-1 text-sm font-bold text-gray-700">{varSource.observationCount}일</p>
               </div>
               <div className="rounded-xl bg-slate-50 px-4 py-3">
-                <p className="text-xs font-semibold text-gray-400">실제 누적 데이터</p>
-                <p className="mt-1 text-sm font-bold text-gray-700">{actualReturnsPct.length}일</p>
+                <p className="text-xs font-semibold text-gray-400">계산 반영 비중</p>
+                <p className={`mt-1 text-sm font-bold ${varSource.excluded.length > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
+                  {varSource.coveragePct.toFixed(1)}%
+                </p>
               </div>
               <div className="rounded-xl bg-slate-50 px-4 py-3">
                 <p className="text-xs font-semibold text-gray-400">VaR 계산 상태</p>
@@ -1076,59 +1205,60 @@ export default function PortfolioRisk({
               </div>
             </div>
 
-            {lastCapturedAt && (
-              <p className="mt-3 text-xs text-gray-400">마지막 스냅샷 적재: {lastCapturedAt}</p>
-            )}
-
-            {backfillReturnsPct.length > 0 && (
-              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
-                실제 수익률 {actualReturnsPct.length}일에 보조 데이터 {backfillReturnsPct.length}일을 더해 초기 VaR를 계산합니다.
-              </div>
-            )}
-
-            {returnHistoryError && (
+            {historyState.error && (
               <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
-                {returnHistoryError}
+                {historyState.error}
               </div>
             )}
 
-            {returnRows.length > 0 ? (
+            {varSource.excluded.length > 0 && (
+              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+                일부 종목 이력 조회 실패로 {varSource.coveragePct.toFixed(1)}% 비중만 재조정해 계산합니다:
+                {' '}{varSource.excluded.map((item) => item.name || item.ticker).join(', ')}
+              </div>
+            )}
+
+            {varSource.rows.length > 0 ? (
               <div className="mt-4 overflow-hidden rounded-xl border border-gray-100">
+                <div className="flex items-center justify-between border-b border-gray-100 bg-gray-50 px-4 py-2">
+                  <span className="text-xs font-semibold text-gray-500">최근 수익률 미리보기</span>
+                  <span className="text-xs font-semibold text-gray-400">
+                    최근 {Math.min(10, varSource.rows.length)}개 / 전체 {varSource.rows.length}개
+                  </span>
+                </div>
                 <div className="max-h-56 overflow-y-auto">
                   <table className="w-full text-sm">
                     <thead className="bg-gray-50 text-xs font-semibold text-gray-400">
                       <tr>
                         <th className="px-4 py-3 text-left">기준일</th>
-                        <th className="px-4 py-3 text-right">일별 수익률</th>
-                        <th className="px-4 py-3 text-right">평가금액</th>
+                        <th className="px-4 py-3 text-right">현재비중 포트폴리오 수익률</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
-                      {[...returnRows].reverse().slice(0, 10).map((row) => (
+                      {[...varSource.rows].reverse().slice(0, 10).map((row) => {
+                        const returnValue = Number(row.returnPct)
+
+                        return (
                         <tr key={row.tradeDate}>
                           <td className="px-4 py-3 text-gray-600">{row.tradeDate}</td>
                           <td className={`px-4 py-3 text-right font-semibold ${
-                            Number(row.returnPct) >= 0 ? 'text-emerald-600' : 'text-red-500'
+                            returnValue >= 0 ? 'text-emerald-600' : 'text-red-500'
                           }`}>
-                            {Number.isFinite(Number(row.returnPct))
-                              ? `${Number(row.returnPct) >= 0 ? '+' : ''}${fmtPct(Number(row.returnPct))}`
-                              : '-'}
-                          </td>
-                          <td className="px-4 py-3 text-right font-semibold text-gray-700">
-                            {fmtKRW(row.portfolioValue)}
+                            {`${returnValue >= 0 ? '+' : ''}${fmtPct(returnValue)}`}
                           </td>
                         </tr>
-                      ))}
+                        )
+                      })}
                     </tbody>
                   </table>
                 </div>
               </div>
             ) : (
               <div className="mt-4 rounded-xl border-2 border-dashed border-gray-200 bg-gray-50 p-6 text-center">
-                <p className="text-3xl mb-2">🕒</p>
-                <p className="text-sm font-semibold text-gray-500">아직 적재된 일별 수익률이 없습니다</p>
+                <p className="text-3xl mb-2">📈</p>
+                <p className="text-sm font-semibold text-gray-500">아직 산출 가능한 일봉 수익률이 없습니다</p>
                 <p className="mt-1 text-xs text-gray-400">
-                  Cron이 실행되면 날짜별 평가금액과 수익률이 자동으로 쌓입니다.
+                  종목코드와 현재가가 있는 보유 종목을 기준으로 KIS 일봉 이력을 조회합니다.
                 </p>
               </div>
             )}
@@ -1166,27 +1296,26 @@ export default function PortfolioRisk({
                   <span className="font-bold text-red-600">{fmtKRW(varResult.var99)}</span> 이내
                 </p>
                 <p className="text-xs text-gray-400 pt-1 border-t border-gray-200">
-                  역사적 시뮬레이션 기준 · 실제 {actualReturnsPct.length}일
-                  {backfillReturnsPct.length > 0 ? ` + 보조 ${backfillReturnsPct.length}일` : ''}
-                  {' '}데이터 사용
+                  현재 보유 비중 고정 · KIS 일봉 {varSource.observationCount}일 사용
+                  {varSource.excluded.length > 0 ? ` · 반영 비중 ${varSource.coveragePct.toFixed(1)}%` : ''}
                 </p>
               </div>
             </div>
           ) : (
             <div className="bg-gray-50 border-2 border-dashed border-gray-200 rounded-xl p-8 text-center">
-              {actualReturnsPct.length === 0 ? (
-                <>
-                  <p className="text-3xl mb-2">📋</p>
-                  <p className="font-semibold text-gray-500 text-sm mb-1">수익률 기록이 아직 없습니다</p>
-                  <p className="text-xs text-gray-400">
-                    일일 스냅샷이 누적되면 자동으로 VaR 계산에 사용됩니다
-                  </p>
-                </>
-              ) : holdingsWithWeight.length === 0 ? (
+              {riskPositions.length === 0 ? (
                 <>
                   <p className="text-3xl mb-2">📦</p>
                   <p className="font-semibold text-gray-500 text-sm mb-1">보유 종목이 없어 VaR를 계산할 수 없습니다</p>
-                  <p className="text-xs text-gray-400">종목을 추가하거나 저장된 포트폴리오를 불러와 주세요</p>
+                  <p className="text-xs text-gray-400">종목코드와 현재가가 있는 포트폴리오를 구성해 주세요</p>
+                </>
+              ) : historyState.loading ? (
+                <>
+                  <p className="text-3xl mb-2">⏳</p>
+                  <p className="font-semibold text-gray-500 text-sm mb-1">종목별 일봉 이력을 불러오는 중입니다</p>
+                  <p className="text-xs text-gray-400">
+                    현재 보유 비중 기준 수익률 분포를 산출합니다
+                  </p>
                 </>
               ) : (
                 <>

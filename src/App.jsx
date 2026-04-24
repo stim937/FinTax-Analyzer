@@ -44,7 +44,6 @@ function buildDefaultPortfolioDraft() {
 }
 
 const PORTFOLIO_TABLE = 'portfolio'
-const MIN_VAR_OBSERVATIONS = 20
 
 function toNumber(value, fallback = 0) {
   const parsed = Number(value)
@@ -189,61 +188,6 @@ function formatDateTime(value) {
   })
 }
 
-function normalizePortfolioReturnRows(rows) {
-  return (Array.isArray(rows) ? rows : [])
-    .map((row) => ({
-      tradeDate: row?.trade_date ?? '',
-      returnPct: Number(row?.return_pct),
-      portfolioValue: Math.max(0, Number(row?.portfolio_value) || 0),
-      meta: row?.meta && typeof row.meta === 'object' ? row.meta : {},
-    }))
-    .filter((row) => row.tradeDate)
-    .sort((a, b) => a.tradeDate.localeCompare(b.tradeDate))
-}
-
-function calcVaR(returns, portfolioValue) {
-  const sorted = [...returns].sort((a, b) => a - b)
-  const var95 = Math.abs(sorted[Math.floor(sorted.length * 0.05)])
-  const var99 = Math.abs(sorted[Math.floor(sorted.length * 0.01)])
-  return {
-    var95: (var95 / 100) * portfolioValue,
-    var99: (var99 / 100) * portfolioValue,
-    var95pct: var95,
-    var99pct: var99,
-  }
-}
-
-function hashString(value) {
-  let hash = 2166136261
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index)
-    hash = Math.imul(hash, 16777619)
-  }
-  return hash >>> 0
-}
-
-function createSeededRandom(seed) {
-  let state = seed || 1
-  return () => {
-    state = (state * 1664525 + 1013904223) >>> 0
-    return state / 4294967296
-  }
-}
-
-function generateBackfillReturns(seedSource, count) {
-  if (count <= 0) {
-    return []
-  }
-
-  const rand = createSeededRandom(hashString(seedSource))
-  return Array.from({ length: count }, () => {
-    const u1 = Math.max(rand(), 1e-9)
-    const u2 = Math.max(rand(), 1e-9)
-    const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2)
-    return Number((z * 1.15).toFixed(4))
-  })
-}
-
 function SubTabs({ tabs, active, onChange, badge }) {
   return (
     <div className="flex items-center gap-2 mb-5">
@@ -280,7 +224,7 @@ export default function App() {
   const [taxResults, setTaxResults] = useState([])
   const [taxHeader, setTaxHeader] = useState({ company: '', taxYear: 2025 })
   const [portfolioHoldings, setPortfolioHoldings] = useState(initialPortfolioDraft.holdings)
-  const [portfolioReturnSeries, setPortfolioReturnSeries] = useState([])
+  const [portfolioRiskPct, setPortfolioRiskPct] = useState(0)
   const [stock, setStock] = useState(DEFAULT_STOCK)
   const [bond, setBond] = useState(DEFAULT_BOND)
   const [calcHistory, setCalcHistory] = useState([])
@@ -295,12 +239,6 @@ export default function App() {
     hasCheckedRemote: false,
     savedSnapshot: '[]',
   })
-  const [portfolioReturnSync, setPortfolioReturnSync] = useState({
-    loading: false,
-    error: '',
-    lastCapturedAt: '',
-  })
-
   const restorePortfolio = useCallback(async (userId, options = {}) => {
     const { navigate = false } = options
 
@@ -374,42 +312,6 @@ export default function App() {
     }))
   }, [])
 
-  const restorePortfolioReturns = useCallback(async (userId) => {
-    if (!supabase || !userId) {
-      return
-    }
-
-    setPortfolioReturnSync((prev) => ({
-      ...prev,
-      loading: true,
-      error: '',
-    }))
-
-    const { data, error } = await supabase
-      .from('portfolio_returns')
-      .select('trade_date, return_pct, portfolio_value, meta, created_at')
-      .eq('user_id', userId)
-      .order('trade_date', { ascending: true })
-
-    if (error) {
-      setPortfolioReturnSeries([])
-      setPortfolioReturnSync({
-        loading: false,
-        error: '일별 수익률 기록을 불러오지 못했습니다.',
-        lastCapturedAt: '',
-      })
-      return
-    }
-
-    const rows = normalizePortfolioReturnRows(data)
-    setPortfolioReturnSeries(rows)
-    setPortfolioReturnSync({
-      loading: false,
-      error: '',
-      lastCapturedAt: data?.length ? data[data.length - 1]?.created_at ?? '' : '',
-    })
-  }, [])
-
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null)
@@ -468,7 +370,6 @@ export default function App() {
         historyTask,
         taxHeaderTask,
         restorePortfolio(user.id),
-        restorePortfolioReturns(user.id),
       ])
 
       if (txData && txData.length > 0) {
@@ -509,7 +410,7 @@ export default function App() {
     }
 
     void loadUserData()
-  }, [restorePortfolio, restorePortfolioReturns, user])
+  }, [restorePortfolio, user])
 
   const addHistory = useCallback((entry) => {
     setCalcHistory((prev) => {
@@ -545,63 +446,22 @@ export default function App() {
     [portfolioHoldings],
   )
 
-  const portfolioActualReturnsPct = useMemo(
-    () => portfolioReturnSeries
-      .map((row) => Number(row.returnPct))
-      .filter((value) => !Number.isNaN(value) && Number.isFinite(value)),
-    [portfolioReturnSeries],
-  )
-
-  const portfolioBackfillSeed = useMemo(
-    () => JSON.stringify(
-      portfolioHoldings.map(({ ticker, qty, avgPrice }) => ({
-        ticker,
-        qty,
-        avgPrice,
-      })),
-    ),
-    [portfolioHoldings],
-  )
-
-  const portfolioBackfillReturnsPct = useMemo(
-    () => generateBackfillReturns(
-      portfolioBackfillSeed,
-      Math.max(0, MIN_VAR_OBSERVATIONS - portfolioActualReturnsPct.length),
-    ),
-    [portfolioActualReturnsPct.length, portfolioBackfillSeed],
-  )
-
-  const portfolioReturnsPct = useMemo(
-    () => [...portfolioBackfillReturnsPct, ...portfolioActualReturnsPct],
-    [portfolioActualReturnsPct, portfolioBackfillReturnsPct],
-  )
-
-  const portfolioVaRResult = useMemo(() => {
-    if (portfolioReturnsPct.length < MIN_VAR_OBSERVATIONS || portfolioValue <= 0) {
-      return null
-    }
-    return calcVaR(portfolioReturnsPct, portfolioValue)
-  }, [portfolioReturnsPct, portfolioValue])
-
-  const portfolioVaR = portfolioVaRResult?.var95pct ?? 0
-
   const summaryData = useMemo(() => ({
     totalAssets: portfolioValue > 0
       ? `₩ ${portfolioValue.toLocaleString('ko-KR')}`
       : '₩ 0',
-    portfolioVaR: portfolioVaR > 0
-      ? `${portfolioVaR.toFixed(2)}%`
+    portfolioVaR: portfolioRiskPct > 0
+      ? `${portfolioRiskPct.toFixed(2)}%`
       : '0.00%',
     taxReserve: taxReserve !== 0
       ? `₩ ${Math.abs(Math.round(taxReserve)).toLocaleString('ko-KR')}`
       : '₩ 0',
-  }), [portfolioValue, portfolioVaR, taxReserve])
+  }), [portfolioValue, portfolioRiskPct, taxReserve])
 
   const summaryLoading = Boolean(
     user
     && (
       portfolioSync.isRestoring
-      || portfolioReturnSync.loading
       || !portfolioSync.hasCheckedRemote
     ),
   )
@@ -675,6 +535,7 @@ export default function App() {
   }, [portfolioHoldings, portfolioSync.savedSnapshot])
 
   const handlePortfolioUpdate = useCallback(({ totalValue, var95pct }) => {
+    setPortfolioRiskPct(var95pct)
     if (totalValue > 0) {
       addHistory({
         name: '포트폴리오',
@@ -752,7 +613,6 @@ export default function App() {
     setCalcHistory([])
     setTaxHeader({ company: '', taxYear: 2025 })
     setPortfolioHoldings([])
-    setPortfolioReturnSeries([])
     setPortfolioSync({
       isSaving: false,
       isRestoring: false,
@@ -763,11 +623,6 @@ export default function App() {
       hasRemoteSnapshot: false,
       hasCheckedRemote: false,
       savedSnapshot: '[]',
-    })
-    setPortfolioReturnSync({
-      loading: false,
-      error: '',
-      lastCapturedAt: '',
     })
   }, [])
 
@@ -877,7 +732,6 @@ export default function App() {
                   onUpdate={handlePortfolioUpdate}
                   holdings={portfolioHoldings}
                   setHoldings={setPortfolioHoldings}
-                  returnSeries={portfolioReturnSeries}
                   cloudState={{
                     isSupabaseConfigured,
                     userEmail: user?.email ?? '',
@@ -890,9 +744,6 @@ export default function App() {
                     hasRemoteSnapshot: portfolioSync.hasRemoteSnapshot,
                     hasCheckedRemote: portfolioSync.hasCheckedRemote,
                     hasPortfolioChanges,
-                    returnHistoryLoading: portfolioReturnSync.loading,
-                    returnHistoryError: portfolioReturnSync.error,
-                    lastCapturedAt: formatDateTime(portfolioReturnSync.lastCapturedAt),
                   }}
                   cloudActions={{
                     onSave: handlePortfolioSave,

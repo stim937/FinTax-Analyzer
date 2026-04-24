@@ -48,6 +48,8 @@ create table if not exists portfolio (
 
 -- 포트폴리오 수익률/시계열 테이블
 -- 장 마감 후 포트폴리오 평가금액과 전일 대비 수익률을 저장합니다.
+-- meta.return_status='clean'인 행만 VaR 계산에 사용합니다.
+-- 종목/수량 구성이 바뀐 날은 meta.return_status='composition_changed'와 return_pct=null로 저장합니다.
 create table if not exists portfolio_returns (
   id              uuid primary key default gen_random_uuid(),
   user_id         uuid not null references auth.users (id) on delete cascade,
