@@ -46,6 +46,14 @@ function SummaryCard({ icon, label, value, loading }) {
 }
 
 export default function Dashboard({ summaryData = {}, summaryLoading = false, onQuickAction, history = [] }) {
+  const getSummaryLoading = (valueKey) => {
+    if (typeof summaryLoading === 'object' && summaryLoading !== null) {
+      return Boolean(summaryLoading[valueKey])
+    }
+
+    return Boolean(summaryLoading) && valueKey !== 'taxReserve'
+  }
+
   return (
     <div className="space-y-6">
       {/* 요약 카드 */}
@@ -56,7 +64,7 @@ export default function Dashboard({ summaryData = {}, summaryLoading = false, on
             icon={icon}
             label={label}
             value={summaryData[valueKey] ?? fallback}
-            loading={summaryLoading && valueKey !== 'taxReserve'}
+            loading={getSummaryLoading(valueKey)}
           />
         ))}
       </div>
