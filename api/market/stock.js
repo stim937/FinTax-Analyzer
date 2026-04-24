@@ -19,6 +19,7 @@ import path from 'node:path'
 
 const KIS_BASE = 'https://openapi.koreainvestment.com:9443'
 const TOKEN_CACHE_PATH = path.join(os.tmpdir(), 'fintax-kis-token.json')
+const PRICE_RETRY_DELAYS = [300, 700, 1500, 3000]
 let cachedAccessToken = ''
 let cachedAccessTokenExpiresAt = 0
 
@@ -40,7 +41,9 @@ async function getKisAccessToken() {
       cachedAccessTokenExpiresAt = Number(saved.expiresAt)
       return cachedAccessToken
     }
-  } catch {}
+  } catch {
+    // 토큰 파일 캐시는 보조 경로라 실패해도 새 토큰 발급으로 진행합니다.
+  }
 
   const response = await fetch(`${KIS_BASE}/oauth2/tokenP`, {
     method: 'POST',
@@ -72,8 +75,16 @@ async function getKisAccessToken() {
       }),
       'utf8',
     )
-  } catch {}
+  } catch {
+    // 서버리스 임시 저장소 쓰기 실패는 다음 호출에서 다시 토큰을 발급받으면 됩니다.
+  }
   return cachedAccessToken
+}
+
+function wait(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms)
+  })
 }
 
 async function getKisStockQuote(ticker, accessToken) {
@@ -96,7 +107,7 @@ async function getKisStockQuote(ticker, accessToken) {
   const output = data?.output
 
   if (!response.ok || !output?.stck_prpr) {
-    throw new Error(data?.msg1 || 'KIS 시세 응답이 올바르지 않습니다.')
+    throw new Error(`${ticker} KIS 시세 조회 실패 (${response.status}): ${data?.msg1 || 'KIS 시세 응답이 올바르지 않습니다.'}`)
   }
 
   return {
@@ -110,6 +121,24 @@ async function getKisStockQuote(ticker, accessToken) {
     pbr: Number(output.pbr) || 0,
     bps: Number(output.bps) || 0,
   }
+}
+
+async function getKisStockQuoteWithRetry(ticker, accessToken, attempts = 5) {
+  let lastError = null
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await getKisStockQuote(ticker, accessToken)
+    } catch (error) {
+      lastError = error
+
+      if (attempt < attempts - 1) {
+        await wait(PRICE_RETRY_DELAYS[attempt] ?? PRICE_RETRY_DELAYS.at(-1))
+      }
+    }
+  }
+
+  throw lastError ?? new Error(`${ticker} KIS 시세 조회 실패`)
 }
 
 export default async function handler(req, res) {
@@ -131,7 +160,7 @@ export default async function handler(req, res) {
 
   try {
     const token = await getKisAccessToken()
-    const quote = await getKisStockQuote(ticker, token)
+    const quote = await getKisStockQuoteWithRetry(ticker, token)
     return res.json(quote)
   } catch (err) {
     return res.status(500).json({ error: '시세 조회 실패', detail: err.message })
