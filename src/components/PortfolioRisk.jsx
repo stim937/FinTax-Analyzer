@@ -880,7 +880,13 @@ export default function PortfolioRisk({
   } = cloudState ?? {}
 
   const { onSave } = cloudActions ?? {}
-  const hasManyHoldings = holdingsWithWeight.length >= 6
+  const hasManyHoldingsMobile = holdingsWithWeight.length >= 6
+  const hasManyHoldingsDesktop = holdingsWithWeight.length >= 9
+  const holdingsTableScrollClass = hasManyHoldingsDesktop
+    ? 'max-h-[332px] overflow-y-auto pr-1 xl:max-h-[520px]'
+    : hasManyHoldingsMobile
+      ? 'max-h-[332px] overflow-y-auto pr-1 xl:max-h-none xl:overflow-visible xl:pr-0'
+      : ''
 
   return (
     <div className="space-y-6">
@@ -1006,7 +1012,7 @@ export default function PortfolioRisk({
           </div>
 
           <div className="overflow-x-auto">
-            <div className={hasManyHoldings ? 'max-h-[332px] overflow-y-auto pr-1' : ''}>
+            <div className={holdingsTableScrollClass}>
               <table className="w-full text-sm">
               <thead>
                 <tr className="text-xs font-semibold text-gray-400 uppercase tracking-wide">
