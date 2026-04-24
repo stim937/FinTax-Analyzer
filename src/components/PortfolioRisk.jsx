@@ -138,6 +138,40 @@ const fmtPct = (value) => (
 const inputCls =
   'w-full rounded-lg border border-gray-200 px-2 py-1.5 text-sm transition focus:outline-none focus:ring-2 focus:ring-inset focus:ring-midblue focus:border-transparent'
 
+const PRICE_RETRY_DELAYS = [300, 700, 1500, 3000]
+
+function wait(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms)
+  })
+}
+
+async function fetchPriceWithRetry(ticker, attempts = 5) {
+  let lastError = null
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const response = await fetch(`/api/market/stock?ticker=${encodeURIComponent(ticker)}`)
+      const data = await response.json()
+
+      if (!response.ok || !Number(data?.price)) {
+        const reason = data?.detail || data?.error || '현재가 조회 실패'
+        throw new Error(`${ticker} 현재가 조회 실패 (${response.status}): ${reason}`)
+      }
+
+      return data
+    } catch (error) {
+      lastError = error
+
+      if (attempt < attempts - 1) {
+        await wait(PRICE_RETRY_DELAYS[attempt] ?? PRICE_RETRY_DELAYS.at(-1))
+      }
+    }
+  }
+
+  throw lastError ?? new Error(`${ticker} 현재가 조회 실패`)
+}
+
 function ReturnHistogram({ returnsPct, var95pct, var99pct }) {
   const hist = useMemo(() => buildHistogram(returnsPct), [returnsPct])
   if (!hist) {
@@ -363,7 +397,7 @@ export default function PortfolioRisk({
         },
       },
     },
-  }), [totalValue])
+  }), [totalReturnPct, totalValue])
 
   const lookupFeedback = useMemo(() => {
     const entries = Object.entries(lookupState)
@@ -577,6 +611,13 @@ export default function PortfolioRisk({
 
     try {
       const updated = []
+      const failedTickers = []
+      const pricedHoldings = holdings.filter((holding) => holding.ticker)
+
+      if (pricedHoldings.length > 0) {
+        setRefreshMsg(`시세 ${pricedHoldings.length}개 조회 중`)
+      }
+
       for (const holding of holdings) {
         if (!holding.ticker) {
           updated.push(holding)
@@ -584,21 +625,29 @@ export default function PortfolioRisk({
         }
 
         try {
-          const response = await fetch(`/api/market/stock?ticker=${holding.ticker}`)
-          const data = await response.json()
-          updated.push(Number(data?.price) > 0 ? { ...holding, currentPrice: Number(data.price) } : holding)
+          const data = await fetchPriceWithRetry(holding.ticker)
+          updated.push({
+            ...holding,
+            name: data.name || holding.name,
+            currentPrice: Number(data.price),
+          })
         } catch {
+          failedTickers.push(holding.ticker)
           updated.push(holding)
         }
       }
 
       setHoldings(updated)
-      setRefreshMsg('시세 업데이트 완료')
+      setRefreshMsg(
+        failedTickers.length > 0
+          ? `${failedTickers.join(', ')} 현재가 조회 실패`
+          : '시세 업데이트 완료',
+      )
     } catch {
       setRefreshMsg('업데이트 실패')
     } finally {
       setRefreshing(false)
-      setTimeout(() => setRefreshMsg(''), 3000)
+      setTimeout(() => setRefreshMsg(''), 5000)
     }
   }
 
