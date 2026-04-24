@@ -139,6 +139,7 @@ const inputCls =
   'w-full rounded-lg border border-gray-200 px-2 py-1.5 text-sm transition focus:outline-none focus:ring-2 focus:ring-inset focus:ring-midblue focus:border-transparent'
 
 const PRICE_RETRY_DELAYS = [300, 700, 1500, 3000]
+const PRICE_REFRESH_CONCURRENCY = 2
 
 function wait(ms) {
   return new Promise((resolve) => {
@@ -332,6 +333,7 @@ export default function PortfolioRisk({
   const [lookupState, setLookupState] = useState({})
   const lookupRequestsRef = useRef({})
   const refreshMessageTimerRef = useRef(null)
+  const refreshResultTimersRef = useRef({})
 
   const totalValue = useMemo(
     () => holdings.reduce((sum, holding) => sum + holding.qty * holding.currentPrice, 0),
@@ -472,7 +474,28 @@ export default function PortfolioRisk({
     if (refreshMessageTimerRef.current) {
       clearTimeout(refreshMessageTimerRef.current)
     }
+    Object.values(refreshResultTimersRef.current).forEach((timer) => clearTimeout(timer))
   }, [])
+
+  const clearRefreshResultTimer = (id) => {
+    if (refreshResultTimersRef.current[id]) {
+      clearTimeout(refreshResultTimersRef.current[id])
+      delete refreshResultTimersRef.current[id]
+    }
+  }
+
+  const clearRefreshResult = (id) => {
+    clearRefreshResultTimer(id)
+    setRefreshResults((prev) => {
+      if (!prev[id]) {
+        return prev
+      }
+
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
+  }
 
   const updateHolding = (id, field, value) => {
     setHoldings((prev) => prev.map((holding) => (
@@ -498,15 +521,7 @@ export default function PortfolioRisk({
       delete next[id]
       return next
     })
-    setRefreshResults((prev) => {
-      if (!prev[id]) {
-        return prev
-      }
-
-      const next = { ...prev }
-      delete next[id]
-      return next
-    })
+    clearRefreshResult(id)
     delete lookupRequestsRef.current[id]
   }
 
@@ -628,9 +643,9 @@ export default function PortfolioRisk({
     if (refreshMessageTimerRef.current) {
       clearTimeout(refreshMessageTimerRef.current)
     }
+    Object.keys(refreshResultTimersRef.current).forEach((id) => clearRefreshResultTimer(id))
 
     try {
-      const updated = []
       const failedTickers = []
       const pricedHoldings = holdings.filter((holding) => holding.ticker)
       const nextResults = holdings.reduce((acc, holding) => {
@@ -655,43 +670,59 @@ export default function PortfolioRisk({
         return
       }
 
-      for (const holding of holdings) {
-        if (!holding.ticker) {
-          updated.push(holding)
-          continue
-        }
+      const nextHoldings = [...holdings]
 
-        try {
-          const data = await fetchPriceWithRetry(holding.ticker)
-          const currentPrice = Number(data.price)
-          updated.push({
-            ...holding,
-            name: data.name || holding.name,
-            currentPrice,
-          })
-          setRefreshResults((prev) => ({
-            ...prev,
-            [holding.id]: {
-              status: 'success',
-              message: `현재가 ${fmtKRW(currentPrice)} 반영`,
-              ticker: holding.ticker,
-            },
-          }))
-        } catch (error) {
-          failedTickers.push(holding.ticker)
-          updated.push(holding)
-          setRefreshResults((prev) => ({
-            ...prev,
-            [holding.id]: {
-              status: 'error',
-              message: error.message || '현재가 조회 실패. 기존 가격을 유지했습니다.',
-              ticker: holding.ticker,
-            },
-          }))
+      async function refreshWorker(startIndex) {
+        for (let index = startIndex; index < holdings.length; index += PRICE_REFRESH_CONCURRENCY) {
+          const holding = holdings[index]
+
+          if (!holding.ticker) {
+            nextHoldings[index] = holding
+            continue
+          }
+
+          try {
+            const data = await fetchPriceWithRetry(holding.ticker)
+            const currentPrice = Number(data.price)
+            nextHoldings[index] = {
+              ...holding,
+              name: data.name || holding.name,
+              currentPrice,
+            }
+            setRefreshResults((prev) => ({
+              ...prev,
+              [holding.id]: {
+                status: 'success',
+                message: `현재가 ${fmtKRW(currentPrice)} 반영`,
+                ticker: holding.ticker,
+              },
+            }))
+            refreshResultTimersRef.current[holding.id] = setTimeout(() => {
+              clearRefreshResult(holding.id)
+            }, 1600)
+          } catch (error) {
+            failedTickers.push(holding.ticker)
+            nextHoldings[index] = holding
+            setRefreshResults((prev) => ({
+              ...prev,
+              [holding.id]: {
+                status: 'error',
+                message: error.message || '현재가 조회 실패. 기존 가격을 유지했습니다.',
+                ticker: holding.ticker,
+              },
+            }))
+          }
         }
       }
 
-      setHoldings(updated)
+      await Promise.all(
+        Array.from(
+          { length: Math.min(PRICE_REFRESH_CONCURRENCY, holdings.length || 1) },
+          (_, index) => refreshWorker(index),
+        ),
+      )
+
+      setHoldings(nextHoldings)
       setRefreshMsg(
         failedTickers.length > 0
           ? `${failedTickers.join(', ')} 현재가 조회 실패`
@@ -863,10 +894,7 @@ export default function PortfolioRisk({
                 </tr>
               </thead>
                 <tbody className="divide-y divide-gray-50">
-                  {holdingsWithWeight.length > 0 ? holdingsWithWeight.map((holding) => {
-                    const refreshState = refreshResults[holding.id]
-
-                    return (
+                  {holdingsWithWeight.length > 0 ? holdingsWithWeight.map((holding) => (
                     <tr key={holding.id}>
                       <td className="py-2 pr-2">
                         <div className="space-y-1">
@@ -902,15 +930,7 @@ export default function PortfolioRisk({
                             onChange={(event) => {
                               updateHolding(holding.id, 'ticker', event.target.value.replace(/\D/g, ''))
                               setLookupStatus(holding.id, { message: '', tone: '', lastKey: '' })
-                              setRefreshResults((prev) => {
-                                if (!prev[holding.id]) {
-                                  return prev
-                                }
-
-                                const next = { ...prev }
-                                delete next[holding.id]
-                                return next
-                              })
+                              clearRefreshResult(holding.id)
                             }}
                             onBlur={(event) => lookupHolding(holding.id, 'ticker', event.target.value)}
                             onKeyDown={(event) => handleLookupKeyDown(event, holding, 'ticker')}
@@ -934,29 +954,26 @@ export default function PortfolioRisk({
                         />
                       </td>
                       <td className="py-2 px-2">
-                        <div className="space-y-1">
-                          <FormattedInput
-                            className={`${inputCls} text-right bg-gray-50 cursor-default select-none text-gray-500`}
-                            value={holding.currentPrice}
-                            min={0}
-                            onChange={(value) => updateHolding(holding.id, 'currentPrice', value)}
-                            readOnly
-                          />
-                          {refreshState?.message && (
-                            <div className={`text-[11px] leading-snug ${
-                              refreshState.status === 'success'
-                                ? 'text-emerald-600'
-                                : refreshState.status === 'error'
-                                  ? 'text-red-500'
-                                  : 'text-gray-400'
-                            }`}>
-                              {refreshState.status === 'pending' && <Spinner size="xs" label="" />}
-                              <span className={refreshState.status === 'pending' ? 'ml-1' : ''}>
-                                {refreshState.message}
-                              </span>
-                            </div>
-                          )}
-                        </div>
+                        {(() => {
+                          const refreshState = refreshResults[holding.id]
+                          const refreshClass = refreshState?.status === 'success'
+                            ? 'border-emerald-400 bg-emerald-50 text-emerald-700 ring-2 ring-emerald-100'
+                            : refreshState?.status === 'error'
+                              ? 'border-red-400 bg-red-50 text-red-600 ring-2 ring-red-100'
+                              : refreshState?.status === 'pending'
+                                ? 'border-midblue bg-blue-50 text-midblue ring-2 ring-blue-100'
+                                : 'border-gray-200 bg-gray-50 text-gray-500'
+
+                          return (
+                        <FormattedInput
+                          className={`w-full rounded-lg border px-2 py-1.5 text-sm transition-colors duration-500 focus:outline-none text-right cursor-default select-none ${refreshClass}`}
+                          value={holding.currentPrice}
+                          min={0}
+                          onChange={(value) => updateHolding(holding.id, 'currentPrice', value)}
+                          readOnly
+                        />
+                          )
+                        })()}
                       </td>
                       <td className={`py-2 px-2 text-right font-semibold ${holding.returnPct >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
                         {holding.avgPrice > 0
@@ -976,8 +993,7 @@ export default function PortfolioRisk({
                         </button>
                       </td>
                     </tr>
-                    )
-                  }) : (
+                  )) : (
                     <tr>
                       <td colSpan={8} className="py-10 text-center">
                         <div className="space-y-2">
