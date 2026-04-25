@@ -297,6 +297,7 @@ export default function App() {
   const loadedUserDataRef = useRef('')
 
   const [user, setUser] = useState(null)
+  const userRef = useRef(null)
   const [authLoading, setAuthLoading] = useState(true)
 
   const [activeTab, setActiveTab] = useState('finance')
@@ -323,6 +324,9 @@ export default function App() {
     hasCheckedRemote: false,
     savedSnapshot: '[]',
   })
+
+  userRef.current = user
+
   const restorePortfolio = useCallback(async (userId, options = {}) => {
     const { navigate = false } = options
 
@@ -505,12 +509,14 @@ export default function App() {
       ].slice(0, 20)
     })
 
-    if (user) {
+    const currentUser = userRef.current
+
+    if (currentUser) {
       void supabase
         .from('calc_history')
         .upsert(
           {
-            user_id: user.id,
+            user_id: currentUser.id,
             type: entry.type,
             label: entry.name,
             value: entry.result,
@@ -518,8 +524,13 @@ export default function App() {
           },
           { onConflict: 'user_id,type' },
         )
+        .then(({ error }) => {
+          if (error) {
+            console.warn('[History] 계산 이력을 저장하지 못했습니다.', error.message)
+          }
+        })
     }
-  }, [user])
+  }, [])
 
   const taxReserve = taxResults.length > 0
     ? taxResults[taxResults.length - 1].runningReserve
