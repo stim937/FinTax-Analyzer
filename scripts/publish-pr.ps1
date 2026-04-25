@@ -135,10 +135,36 @@ if ($existingPr.Count -gt 0) {
 }
 
 if ($Merge) {
-  Write-Host "[publish-pr] PR #$prNumber 을 일반 병합하고 원격 브랜치를 삭제합니다..." -ForegroundColor Cyan
-  gh pr merge $prNumber --merge --delete-branch
+  Write-Host "[publish-pr] PR #$prNumber 을 일반 병합합니다..." -ForegroundColor Cyan
+  gh pr merge $prNumber --merge
   if ($LASTEXITCODE -ne 0) {
     throw 'gh pr merge 실행에 실패했습니다.'
+  }
+
+  Write-Host "[publish-pr] 원격 브랜치 '$branch' 를 삭제합니다..." -ForegroundColor Cyan
+  $remoteBranch = git ls-remote --heads origin $branch
+  if ($LASTEXITCODE -ne 0) {
+    throw '원격 브랜치 조회에 실패했습니다.'
+  }
+
+  if ($remoteBranch) {
+    git push origin --delete $branch
+    if ($LASTEXITCODE -ne 0) {
+      throw '원격 브랜치 삭제에 실패했습니다.'
+    }
+  } else {
+    Write-Host "[publish-pr] 원격 브랜치 '$branch' 가 이미 삭제되어 있습니다." -ForegroundColor Yellow
+  }
+
+  Write-Host "[publish-pr] origin/$BaseBranch 기준 detached HEAD로 정리합니다..." -ForegroundColor Cyan
+  git fetch --prune origin $BaseBranch
+  if ($LASTEXITCODE -ne 0) {
+    throw 'base 브랜치 갱신에 실패했습니다.'
+  }
+
+  git switch --detach "origin/$BaseBranch"
+  if ($LASTEXITCODE -ne 0) {
+    throw 'detached HEAD 전환에 실패했습니다.'
   }
 }
 
