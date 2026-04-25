@@ -40,6 +40,13 @@ No test framework is configured, so use `npm run lint` and `npm run build` as th
 - When the user asks to publish work as a PR after code changes, prefer `npm run publish:pr -- "<commit message>"` over manually repeating git and gh steps.
 - When the user asks to merge work into `main`, keep the current working branch and run the current-branch flow: commit on the current branch, push it, create a non-draft PR to `main`, merge with GitHub's normal merge method, then delete the remote work branch. Prefer `npm run publish:merge -- "<commit message>"` for that flow.
 
+## Git workflow
+
+- Start new code changes from an up-to-date `main` branch.
+- For each new task, create a separate `codex/...` working branch before editing.
+- Do not create a new branch when the user explicitly asks to continue or merge the current branch.
+- When the user asks to merge into `main`, use the current working branch: commit, push, create a non-draft PR to `main`, merge with a normal merge commit, then delete the remote working branch.
+
 ## Where to work
 
 - `src/App.jsx` - shared app state and tab navigation
