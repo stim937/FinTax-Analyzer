@@ -1,3 +1,4 @@
+import { Info } from 'lucide-react'
 import Spinner from './ui/Spinner'
 
 const DEFAULT_SUMMARY = [
@@ -67,6 +68,17 @@ export default function Dashboard({ summaryData = {}, summaryLoading = false, on
             loading={getSummaryLoading(valueKey)}
           />
         ))}
+      </div>
+
+      <div className="flex gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+        <div className="space-y-1">
+          <p className="font-semibold">FinTax 프로토타입 안내</p>
+          <p className="text-amber-800">
+            현재 시세는 KIS 모의투자 API를 통해 조회되므로 응답 지연, 일시적 실패, 실제 거래 시세와의 차이가 발생할 수 있습니다.
+            계산 결과는 기능 검증과 프로토타입 참고용으로만 사용해 주세요.
+          </p>
+        </div>
       </div>
 
       {/* 하단 2단 그리드 */}
