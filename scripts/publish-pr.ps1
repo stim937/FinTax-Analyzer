@@ -7,7 +7,9 @@ param(
 
   [string]$BaseBranch = 'main',
 
-  [switch]$Ready
+  [switch]$Ready,
+
+  [switch]$Merge
 )
 
 $ErrorActionPreference = 'Stop'
@@ -36,6 +38,10 @@ if ($branch -eq $BaseBranch) {
 
 if (-not $PrTitle) {
   $PrTitle = $CommitMessage
+}
+
+if ($Merge) {
+  $Ready = $true
 }
 
 $status = git status --porcelain
@@ -81,18 +87,16 @@ if ($LASTEXITCODE -ne 0) {
 
 $existingPr = $existingPrJson | ConvertFrom-Json
 if ($existingPr.Count -gt 0) {
-  Write-Host "[publish-pr] 기존 PR이 이미 존재합니다: $($existingPr[0].url)" -ForegroundColor Yellow
-  exit 0
-}
-
-$draftFlag = if ($Ready) { '' } else { '--draft' }
-
-$body = @"
+  $prNumber = $existingPr[0].number
+  $prUrl = $existingPr[0].url
+  Write-Host "[publish-pr] 기존 PR이 이미 존재합니다: $prUrl" -ForegroundColor Yellow
+} else {
+  $body = @"
 ## 변경 요약
 - $CommitMessage
 
 ## 변경 이유
-- 작업 완료 후 현재 브랜치 변경사항을 빠르게 공유하고 PR을 열기 위한 자동화 실행입니다.
+- 현재 작업 브랜치 변경사항을 main에 반영하기 위한 자동화 실행입니다.
 
 ## 테스트 방법
 - 필요 시 로컬에서 관련 명령으로 확인
@@ -102,20 +106,40 @@ $body = @"
 - [ ] npm run build
 "@
 
-$bodyFile = Join-Path $PWD 'tmp-pr-body.md'
-[System.IO.File]::WriteAllText($bodyFile, $body, [System.Text.UTF8Encoding]::new($false))
+  $bodyFile = Join-Path $PWD 'tmp-pr-body.md'
+  [System.IO.File]::WriteAllText($bodyFile, $body, [System.Text.UTF8Encoding]::new($false))
 
-try {
-  Write-Host "[publish-pr] PR을 생성합니다..." -ForegroundColor Cyan
-  if ($Ready) {
-    gh pr create --base $BaseBranch --head $branch --title $PrTitle --body-file $bodyFile
-  } else {
-    gh pr create --base $BaseBranch --head $branch --draft --title $PrTitle --body-file $bodyFile
+  try {
+    Write-Host "[publish-pr] PR을 생성합니다..." -ForegroundColor Cyan
+    if ($Ready) {
+      $prUrl = gh pr create --base $BaseBranch --head $branch --title $PrTitle --body-file $bodyFile
+    } else {
+      $prUrl = gh pr create --base $BaseBranch --head $branch --draft --title $PrTitle --body-file $bodyFile
+    }
+
+    if ($LASTEXITCODE -ne 0) {
+      throw 'gh pr create 실행에 실패했습니다.'
+    }
+  } finally {
+    Remove-Item -LiteralPath $bodyFile -ErrorAction SilentlyContinue
   }
 
+  $prJson = gh pr view $prUrl --json number,url
   if ($LASTEXITCODE -ne 0) {
-    throw 'gh pr create 실행에 실패했습니다.'
+    throw '생성된 PR 조회에 실패했습니다.'
   }
-} finally {
-  Remove-Item -LiteralPath $bodyFile -ErrorAction SilentlyContinue
+
+  $pr = $prJson | ConvertFrom-Json
+  $prNumber = $pr.number
+  $prUrl = $pr.url
 }
+
+if ($Merge) {
+  Write-Host "[publish-pr] PR #$prNumber 을 일반 병합하고 원격 브랜치를 삭제합니다..." -ForegroundColor Cyan
+  gh pr merge $prNumber --merge --delete-branch
+  if ($LASTEXITCODE -ne 0) {
+    throw 'gh pr merge 실행에 실패했습니다.'
+  }
+}
+
+Write-Host "[publish-pr] 완료: $prUrl" -ForegroundColor Green

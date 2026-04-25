@@ -22,6 +22,7 @@ npm run dev       # Start Vite dev server only (http://localhost:5173)
 npm run dev:api   # Start Vercel Functions locally (http://localhost:3000)
 npm run dev:full  # Windows integrated flow: load .env.local and start App + API
 npm run publish:pr -- "chore: 변경 설명"  # Stage, commit, push, and open a draft PR
+npm run publish:merge -- "fix: 변경 설명"  # Stage, commit, push, open PR, merge into main, delete remote branch
 npm run build     # Production build
 npm run preview   # Serve production build locally
 npm run lint      # Run ESLint
@@ -37,6 +38,7 @@ No test framework is configured, so use `npm run lint` and `npm run build` as th
 - Do not commit generated logs or local-only artifacts.
 - Treat `run-dev-with-api.bat` as a convenience wrapper, not the main implementation.
 - When the user asks to publish work as a PR after code changes, prefer `npm run publish:pr -- "<commit message>"` over manually repeating git and gh steps.
+- When the user asks to merge work into `main`, keep the current working branch and run the current-branch flow: commit on the current branch, push it, create a non-draft PR to `main`, merge with GitHub's normal merge method, then delete the remote work branch. Prefer `npm run publish:merge -- "<commit message>"` for that flow.
 
 ## Where to work
 
