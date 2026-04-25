@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
+import { RefreshCw } from 'lucide-react'
 import UITooltip from './ui/Tooltip'
 import FormattedInput from './ui/FormattedInput'
 import Spinner from './ui/Spinner'
@@ -337,6 +338,7 @@ export default function PortfolioRisk({
     results: {},
     error: '',
   })
+  const [historyRetryKey, setHistoryRetryKey] = useState(0)
   const [lookupState, setLookupState] = useState({})
   const lookupRequestsRef = useRef({})
   const refreshMessageTimerRef = useRef(null)
@@ -593,7 +595,15 @@ export default function PortfolioRisk({
         historyRequestRef.current += 1
       }
     }
-  }, [riskPositions])
+  }, [riskPositions, historyRetryKey])
+
+  const handleRetryHistory = () => {
+    if (historyState.loading || riskPositions.length === 0) {
+      return
+    }
+
+    setHistoryRetryKey((key) => key + 1)
+  }
 
   useEffect(() => {
     const maxId = holdings.reduce((currentMax, holding) => Math.max(currentMax, Number(holding.id) || 0), 0)
@@ -1212,8 +1222,18 @@ export default function PortfolioRisk({
             </div>
 
             {historyState.error && (
-              <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
-                {historyState.error}
+              <div className="mt-3 flex flex-col gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600 sm:flex-row sm:items-center sm:justify-between">
+                <span>{historyState.error}</span>
+                <button
+                  type="button"
+                  onClick={handleRetryHistory}
+                  disabled={historyState.loading || riskPositions.length === 0}
+                  className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-bold text-red-600 transition hover:border-red-300 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  aria-label="VaR 산출 수익률 다시 조회"
+                >
+                  <RefreshCw size={14} />
+                  다시 조회
+                </button>
               </div>
             )}
 
