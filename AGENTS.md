@@ -42,10 +42,11 @@ No test framework is configured, so use `npm run lint` and `npm run build` as th
 
 ## Git workflow
 
-- Start new code changes from an up-to-date `main` branch.
-- For each new task, create a separate `codex/...` working branch before editing.
-- Do not create a new branch when the user explicitly asks to continue or merge the current branch.
-- When the user asks to merge into `main`, use the current working branch: commit, push, create a non-draft PR to `main`, merge with a normal merge commit, then delete the remote working branch.
+- Start new code changes by fetching `origin` and creating a separate `codex/...` working branch from `origin/main`.
+- Do not check out local `main` just to start work; it may already be checked out by another worktree.
+- Do not create a new branch when the user explicitly asks to continue or merge the current named branch.
+- If the worktree is on detached HEAD and the user asks to merge, first create a `codex/...` branch from the current HEAD, then use that branch for the merge flow.
+- When the user asks to merge into `main`, use the current working branch: commit on the current branch, push it, create a non-draft PR to `main`, merge with a normal merge commit, then delete the remote working branch.
 
 ## Where to work
 
