@@ -9,6 +9,7 @@
     "dev:api": "vercel dev --listen 3000",
     "dev:full": "pwsh -ExecutionPolicy Bypass -File ./run-dev-with-api.ps1",
     "publish:pr": "pwsh -ExecutionPolicy Bypass -File ./scripts/publish-pr.ps1",
+    "publish:merge": "pwsh -ExecutionPolicy Bypass -File ./scripts/publish-pr.ps1 -Merge",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview"
