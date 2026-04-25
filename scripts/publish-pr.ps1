@@ -150,7 +150,16 @@ if ($Merge) {
   if ($remoteBranch) {
     git push origin --delete $branch
     if ($LASTEXITCODE -ne 0) {
-      throw '원격 브랜치 삭제에 실패했습니다.'
+      $remoteBranchAfterDelete = git ls-remote --heads origin $branch
+      if ($LASTEXITCODE -ne 0) {
+        throw '원격 브랜치 재조회에 실패했습니다.'
+      }
+
+      if ($remoteBranchAfterDelete) {
+        throw '원격 브랜치 삭제에 실패했습니다.'
+      }
+
+      Write-Host "[publish-pr] 원격 브랜치 '$branch' 가 이미 삭제되어 있습니다." -ForegroundColor Yellow
     }
   } else {
     Write-Host "[publish-pr] 원격 브랜치 '$branch' 가 이미 삭제되어 있습니다." -ForegroundColor Yellow
