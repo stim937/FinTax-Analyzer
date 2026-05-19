@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { supabase } from '../../lib/supabase'
 
-export default function LoginForm() {
+export default function LoginForm({ onTestSignIn, showTestUser = false }) {
   const [mode,     setMode]     = useState('login')   // 'login' | 'signup'
   const [email,    setEmail]    = useState('')
   const [password, setPassword] = useState('')
@@ -131,6 +131,25 @@ export default function LoginForm() {
               {loading ? '처리 중...' : mode === 'login' ? '로그인' : '회원가입'}
             </button>
           </form>
+
+          {showTestUser && (
+            <div className="mt-4">
+              <div className="relative my-4 flex items-center">
+                <div className="h-px flex-1 bg-gray-100" />
+                <span className="px-3 text-xs font-semibold text-gray-300">또는</span>
+                <div className="h-px flex-1 bg-gray-100" />
+              </div>
+              <button
+                type="button"
+                onClick={onTestSignIn}
+                disabled={loading}
+                className="w-full rounded-xl border border-midblue bg-accent py-2.5 text-sm font-bold text-navy
+                           hover:bg-blue-100 transition disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                테스트 회원으로 입장
+              </button>
+            </div>
+          )}
 
           <div className="mt-5 text-center text-sm text-gray-500">
             {mode === 'login' ? (
