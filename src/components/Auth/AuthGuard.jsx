@@ -1,6 +1,6 @@
 import LoginForm from './LoginForm'
 
-export default function AuthGuard({ user, loading, children }) {
+export default function AuthGuard({ user, loading, onTestSignIn, showTestUser, children }) {
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -13,7 +13,7 @@ export default function AuthGuard({ user, loading, children }) {
   }
 
   if (!user) {
-    return <LoginForm />
+    return <LoginForm onTestSignIn={onTestSignIn} showTestUser={showTestUser} />
   }
 
   return children

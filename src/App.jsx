@@ -2,6 +2,14 @@ import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import './index.css'
 
 import { isSupabaseConfigured, supabase } from './lib/supabase'
+import {
+  clearTestUserSession,
+  createTestUser,
+  isTestUser,
+  isTestUserEnabled,
+  loadTestUserSession,
+  saveTestUserSession,
+} from './lib/testUser'
 import AuthGuard from './components/Auth/AuthGuard'
 import Dashboard from './components/Dashboard'
 import BondCalculator, { DEFAULT_BOND } from './components/BondCalculator'
@@ -93,6 +101,30 @@ function buildPortfolioSnapshot(holdings) {
 
 function serializePortfolioSnapshot(holdings) {
   return JSON.stringify(buildPortfolioSnapshot(holdings))
+}
+
+function getUserStorageKey(userId, type) {
+  return `fintax:${type}:${userId}`
+}
+
+function readStoredJson(key, fallback) {
+  try {
+    const value = localStorage.getItem(key)
+    return value ? JSON.parse(value) : fallback
+  } catch (error) {
+    console.warn('[Storage] 저장된 데이터를 복원하지 못했습니다.', error)
+    return fallback
+  }
+}
+
+function writeStoredJson(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value))
+    return true
+  } catch (error) {
+    console.warn('[Storage] 데이터를 저장하지 못했습니다.', error)
+    return false
+  }
 }
 
 const PRICE_RETRY_DELAYS = [300, 700, 1500, 3000]
@@ -325,12 +357,14 @@ export default function App() {
     savedSnapshot: '[]',
   })
 
-  userRef.current = user
+  useEffect(() => {
+    userRef.current = user
+  }, [user])
 
   const restorePortfolio = useCallback(async (userId, options = {}) => {
     const { navigate = false } = options
 
-    if (!supabase || !userId) {
+    if (!supabase || !userId || isTestUser({ id: userId })) {
       return
     }
 
@@ -401,16 +435,42 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    const restoredTestUser = isTestUserEnabled ? loadTestUserSession() : null
+    if (restoredTestUser) {
+      Promise.resolve().then(() => {
+        setUser(restoredTestUser)
+        setAuthLoading(false)
+      })
+      return undefined
+    }
+
+    let isMounted = true
+
     supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null)
-      setAuthLoading(false)
+      if (isMounted) {
+        setUser(session?.user ?? null)
+        setAuthLoading(false)
+      }
     })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null)
     })
 
-    return () => subscription.unsubscribe()
+    return () => {
+      isMounted = false
+      subscription.unsubscribe()
+    }
+  }, [])
+
+  const handleTestSignIn = useCallback(() => {
+    if (!isTestUserEnabled) {
+      return
+    }
+
+    saveTestUserSession()
+    setUser(createTestUser())
+    setAuthLoading(false)
   }, [])
 
   useEffect(() => {
@@ -424,6 +484,43 @@ export default function App() {
     }
 
     loadedUserDataRef.current = user.id
+
+    if (isTestUser(user)) {
+      Promise.resolve().then(() => {
+        const savedHeader = readStoredJson(`taxHeader_${user.id}`, null)
+        if (savedHeader) {
+          setTaxHeader(savedHeader)
+        }
+
+        const savedTransactions = readStoredJson(getUserStorageKey(user.id, 'transactions'), [])
+        const restoredTransactions = Array.isArray(savedTransactions) ? savedTransactions : []
+        setTransactions(restoredTransactions)
+        setTaxResults(analyzeTax(restoredTransactions))
+
+        const savedHistory = readStoredJson(getUserStorageKey(user.id, 'calc-history'), [])
+        setCalcHistory(Array.isArray(savedHistory) ? savedHistory.slice(0, 20) : [])
+
+        const savedPortfolio = readStoredJson(getUserStorageKey(user.id, 'portfolio'), null)
+        const restoredHoldings = normalizeHoldings(savedPortfolio?.holdings)
+        const savedSnapshot = serializePortfolioSnapshot(restoredHoldings)
+        setPortfolioHoldings(restoredHoldings)
+        setPortfolioSync((prev) => ({
+          ...prev,
+          isSaving: false,
+          isRestoring: false,
+          saveError: '',
+          restoreError: '',
+          notice: restoredHoldings.length > 0
+            ? '테스트 포트폴리오를 불러왔습니다.'
+            : '테스트 계정으로 입장했습니다.',
+          lastSavedAt: savedPortfolio?.updated_at ?? '',
+          hasRemoteSnapshot: restoredHoldings.length > 0,
+          hasCheckedRemote: true,
+          savedSnapshot,
+        }))
+      })
+      return
+    }
 
     async function loadUserData() {
       const transactionsTask = supabase
@@ -501,17 +598,23 @@ export default function App() {
   }, [restorePortfolio, user])
 
   const addHistory = useCallback((entry) => {
+    const currentUser = userRef.current
+
     setCalcHistory((prev) => {
       const filtered = prev.filter((history) => history.type !== entry.type)
-      return [
+      const next = [
         { ...entry, id: Date.now(), date: new Date().toLocaleDateString('ko-KR') },
         ...filtered,
       ].slice(0, 20)
+
+      if (isTestUser(currentUser)) {
+        writeStoredJson(getUserStorageKey(currentUser.id, 'calc-history'), next)
+      }
+
+      return next
     })
 
-    const currentUser = userRef.current
-
-    if (currentUser) {
+    if (currentUser && !isTestUser(currentUser)) {
       void supabase
         .from('calc_history')
         .upsert(
@@ -629,7 +732,7 @@ export default function App() {
   }), [portfolioRiskLoading, summaryLoading])
 
   const handlePortfolioSave = useCallback(async () => {
-    if (!supabase || !user?.id) {
+    if (!user?.id) {
       setPortfolioSync((prev) => ({
         ...prev,
         saveError: '로그인 상태를 확인한 뒤 다시 시도해 주세요.',
@@ -643,6 +746,46 @@ export default function App() {
       setPortfolioSync((prev) => ({
         ...prev,
         saveError: '저장할 종목이 없습니다. 종목을 추가한 뒤 다시 시도해 주세요.',
+        notice: '',
+      }))
+      return
+    }
+
+    if (isTestUser(user)) {
+      const savedAt = new Date().toISOString()
+      const savedSnapshot = serializePortfolioSnapshot(sanitizedHoldings)
+
+      if (!writeStoredJson(getUserStorageKey(user.id, 'portfolio'), {
+        holdings: sanitizedHoldings,
+        updated_at: savedAt,
+      })) {
+        setPortfolioSync((prev) => ({
+          ...prev,
+          saveError: '테스트 포트폴리오를 브라우저에 저장하지 못했습니다.',
+          notice: '',
+        }))
+        return
+      }
+
+      setPortfolioSync((prev) => ({
+        ...prev,
+        isSaving: false,
+        isRestoring: false,
+        saveError: '',
+        restoreError: '',
+        notice: '테스트 포트폴리오가 이 브라우저에 저장되었습니다.',
+        lastSavedAt: savedAt,
+        hasRemoteSnapshot: true,
+        hasCheckedRemote: true,
+        savedSnapshot,
+      }))
+      return
+    }
+
+    if (!supabase) {
+      setPortfolioSync((prev) => ({
+        ...prev,
+        saveError: '로그인 상태를 확인한 뒤 다시 시도해 주세요.',
         notice: '',
       }))
       return
@@ -710,12 +853,16 @@ export default function App() {
 
   const handleTaxSave = useCallback(async (data) => {
     const results = analyzeTax(data.transactions)
+    const nextHeader = data.header ?? { company: '', taxYear: 2025 }
     setTransactions(data.transactions)
     setTaxResults(results)
-    setTaxHeader(data.header ?? { company: '', taxYear: 2025 })
+    setTaxHeader(nextHeader)
     setActiveTaxTab('validator')
 
-    if (user) {
+    if (user && isTestUser(user)) {
+      writeStoredJson(getUserStorageKey(user.id, 'transactions'), data.transactions)
+      writeStoredJson(`taxHeader_${user.id}`, nextHeader)
+    } else if (user) {
       await supabase.from('transactions').delete().eq('user_id', user.id)
 
       if (data.transactions.length > 0) {
@@ -734,7 +881,7 @@ export default function App() {
       }
 
       try {
-        localStorage.setItem(`taxHeader_${user.id}`, JSON.stringify(data.header))
+        localStorage.setItem(`taxHeader_${user.id}`, JSON.stringify(nextHeader))
       } catch (error) {
         console.warn('[TaxHeader] 헤더를 저장하지 못했습니다.', error)
       }
@@ -762,15 +909,22 @@ export default function App() {
   }, [])
 
   const handleSignOut = useCallback(async () => {
-    try {
-      const { error } = await supabase.auth.signOut()
-      if (error) {
-        console.warn('[Auth] 로그아웃 요청 실패:', error.message)
+    const currentUser = userRef.current
+    clearTestUserSession()
+
+    if (!isTestUser(currentUser)) {
+      try {
+        const { error } = await supabase.auth.signOut()
+        if (error) {
+          console.warn('[Auth] 로그아웃 요청 실패:', error.message)
+        }
+      } catch (error) {
+        console.warn('[Auth] 로그아웃 요청 중 오류가 발생했습니다.', error)
       }
-    } catch (error) {
-      console.warn('[Auth] 로그아웃 요청 중 오류가 발생했습니다.', error)
     }
 
+    setUser(null)
+    setAuthLoading(false)
     setTransactions([])
     setTaxResults([])
     setCalcHistory([])
@@ -790,7 +944,12 @@ export default function App() {
   }, [])
 
   return (
-    <AuthGuard user={user} loading={authLoading}>
+    <AuthGuard
+      user={user}
+      loading={authLoading}
+      onTestSignIn={handleTestSignIn}
+      showTestUser={isTestUserEnabled}
+    >
       <div className="min-h-screen bg-gray-50">
         <header className="bg-navy shadow-md">
           <div className="max-w-screen-xl mx-auto px-6 py-4 flex items-center justify-between">
@@ -896,7 +1055,7 @@ export default function App() {
                   holdings={portfolioHoldings}
                   setHoldings={setPortfolioHoldings}
                   cloudState={{
-                    isSupabaseConfigured,
+                    isSupabaseConfigured: isTestUser(user) || isSupabaseConfigured,
                     userEmail: user?.email ?? '',
                     isSaving: portfolioSync.isSaving,
                     isRestoring: portfolioSync.isRestoring,
